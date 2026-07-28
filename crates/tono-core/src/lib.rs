@@ -43,10 +43,10 @@
 //!
 //! # Features and the shell
 //!
-//! The lean build is pure compute (serde only); the heavy deps are optional,
-//! behind features (both on by default): `analysis` pulls in rustfft + image for
-//! [`analysis`]/[`review`], and `sampler` pulls in rustysynth for the SoundFont
-//! sampler instrument. So the same core compiles to a native binary, a WASM
+//! The lean build is pure compute (serde + rustfft for the convolve node's FFT
+//! convolution); the heavy deps are optional, behind features (both on by
+//! default): `analysis` pulls in image for [`analysis`]/[`review`] PNGs, and
+//! `sampler` pulls in rustysynth for the SoundFont sampler instrument. So the same core compiles to a native binary, a WASM
 //! playground, or a lean in-engine runtime. The `tono render` CLI, audio-file
 //! encoders, and MIDI export live in the `tono` shell crate that depends on this one.
 //!

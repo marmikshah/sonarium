@@ -651,3 +651,152 @@ fn validate_rejects_bad_sidechain_wiring() {
     );
     assert_eq!(ok.validate(), Ok(()));
 }
+
+#[test]
+fn validate_bounds_convolve_params() {
+    let mk = |extra: &str| {
+        doc(&format!(
+            r#"{{ "name": "n", "root": {{ "type": "chain", "stages": [
+                {{ "type": "noise" }}, {{ "type": "convolve", {extra} }}
+            ] }} }}"#
+        ))
+    };
+    assert!(mk(r#""decay": 1.5"#).validate().is_ok());
+    // size 0 = follow decay (the serde default).
+    assert!(mk(r#""size": 0.0, "predelay": 0.1"#).validate().is_ok());
+    // Unbounded IR times would let a validated doc request arbitrary
+    // allocations (the delay.secs pattern).
+    assert!(
+        mk(r#""decay": 31.0"#)
+            .validate()
+            .unwrap_err()
+            .contains("convolve.decay")
+    );
+    assert!(
+        mk(r#""decay": 0.0"#)
+            .validate()
+            .unwrap_err()
+            .contains("convolve.decay")
+    );
+    assert!(
+        mk(r#""size": 1e9"#)
+            .validate()
+            .unwrap_err()
+            .contains("convolve.size")
+    );
+    assert!(
+        mk(r#""predelay": -0.1"#)
+            .validate()
+            .unwrap_err()
+            .contains("convolve.predelay")
+    );
+    assert!(
+        mk(r#""predelay": 1e308"#)
+            .validate()
+            .unwrap_err()
+            .contains("convolve.predelay")
+    );
+    assert!(
+        mk(r#""damp": 1.5"#)
+            .validate()
+            .unwrap_err()
+            .contains("convolve.damp")
+    );
+    assert!(
+        mk(r#""mix": -0.1"#)
+            .validate()
+            .unwrap_err()
+            .contains("convolve.mix")
+    );
+}
+
+#[test]
+fn validate_bounds_granular_params() {
+    let mk = |extra: &str| {
+        doc(&format!(
+            r#"{{ "name": "n", "root": {{ "type": "chain", "stages": [
+                {{ "type": "sine", "freq": 220 }}, {{ "type": "granular", {extra} }}
+            ] }} }}"#
+        ))
+    };
+    assert!(
+        mk(r#""grain_ms": 80, "density": 25, "pitch": 1.0"#)
+            .validate()
+            .is_ok()
+    );
+    assert!(
+        mk(r#""grain_ms": 4.0"#)
+            .validate()
+            .unwrap_err()
+            .contains("granular.grain_ms")
+    );
+    assert!(
+        mk(r#""grain_ms": 501.0"#)
+            .validate()
+            .unwrap_err()
+            .contains("granular.grain_ms")
+    );
+    assert!(
+        mk(r#""density": 0.05"#)
+            .validate()
+            .unwrap_err()
+            .contains("granular.density")
+    );
+    assert!(
+        mk(r#""density": 1e308"#)
+            .validate()
+            .unwrap_err()
+            .contains("granular.density")
+    );
+    assert!(
+        mk(r#""pitch": 0.2"#)
+            .validate()
+            .unwrap_err()
+            .contains("granular.pitch")
+    );
+    assert!(
+        mk(r#""pitch": 5.0"#)
+            .validate()
+            .unwrap_err()
+            .contains("granular.pitch")
+    );
+    assert!(
+        mk(r#""spread": 2.0"#)
+            .validate()
+            .unwrap_err()
+            .contains("granular.spread")
+    );
+    assert!(
+        mk(r#""mix": 1.1"#)
+            .validate()
+            .unwrap_err()
+            .contains("granular.mix")
+    );
+}
+
+#[test]
+fn convolve_and_granular_defaults_deserialize() {
+    // f32 → JSON round-trips through the f32's shortest form (0.3f32 prints as
+    // 0.30000001192092896), so compare as f32, not against f64 literals.
+    let num = |v: &serde_json::Value| v.as_f64().unwrap() as f32;
+    let c = doc(r#"{ "name": "n", "root": { "type": "chain", "stages": [
+                { "type": "impact" }, { "type": "convolve" } ] } }"#);
+    assert!(c.validate().is_ok());
+    let v = serde_json::to_value(&c).unwrap();
+    let cv = &v["root"]["stages"][1];
+    assert_eq!(num(&cv["decay"]), 1.5);
+    assert_eq!(num(&cv["size"]), 0.0); // 0 = follow decay
+    assert_eq!(num(&cv["predelay"]), 0.0);
+    assert_eq!(num(&cv["damp"]), 0.3);
+    assert_eq!(num(&cv["mix"]), 0.35);
+    let g = doc(r#"{ "name": "n", "root": { "type": "chain", "stages": [
+                { "type": "sine", "freq": 220 }, { "type": "granular" } ] } }"#);
+    assert!(g.validate().is_ok());
+    let v = serde_json::to_value(&g).unwrap();
+    let gr = &v["root"]["stages"][1];
+    assert_eq!(num(&gr["grain_ms"]), 80.0);
+    assert_eq!(num(&gr["density"]), 25.0);
+    assert_eq!(num(&gr["pitch"]), 1.0);
+    assert_eq!(num(&gr["spread"]), 0.3);
+    assert_eq!(num(&gr["mix"]), 0.5);
+}

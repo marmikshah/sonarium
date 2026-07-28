@@ -27,8 +27,10 @@
 //! rustysynth voice); a **`tracks` root** (the stereo mixer + master path — the
 //! runtime's instance-per-layer model covers layering); a **`normalize`**
 //! output stage (a whole-buffer op); **`loop` playback** (the crossfaded loop
-//! body is a whole-buffer transform); and a **stereo** (Haas/Wide) treatment
-//! (applied at write time, not in the graph). [`StreamGraph::blockers`] reports
+//! body is a whole-buffer transform); a **stereo** (Haas/Wide) treatment
+//! (applied at write time, not in the graph); and the **offline-only effects**
+//! `convolve` / `granular` (whole-buffer ops: FFT convolution, out-of-order
+//! grain reads). [`StreamGraph::blockers`] reports
 //! exactly which of these a document trips, with the fix for each.
 
 mod proc;
@@ -70,6 +72,13 @@ pub enum StreamBlocker {
     /// A filter / EQ / gain carries a modulated cutoff or amount — the
     /// streaming biquads hold constant coefficients.
     ModulatedFilter,
+    /// An offline-only effect: convolution needs the whole input buffer at
+    /// once, and the granular texture reads it out of order — neither can be
+    /// evaluated per-sample.
+    OfflineEffect {
+        /// The node's `type` name (`convolve`, `granular`).
+        name: &'static str,
+    },
 }
 
 impl fmt::Display for StreamBlocker {
@@ -102,6 +111,10 @@ impl fmt::Display for StreamBlocker {
             StreamBlocker::ModulatedFilter => write!(
                 f,
                 "a filter/EQ/gain carries a modulated cutoff or amount — bake it constant, or sweep it live with set_cutoff"
+            ),
+            StreamBlocker::OfflineEffect { name } => write!(
+                f,
+                "{name} is an offline effect — it needs the whole input buffer; bounce it offline / apply it at bounce time and keep the streamed graph causal"
             ),
         }
     }
@@ -193,6 +206,14 @@ impl StreamGraph {
                 ..
             } => {
                 out.push(StreamBlocker::ModulatedFilter);
+            }
+            // Offline-only whole-buffer effects (FFT convolution; out-of-order
+            // granular reads) — no per-sample streaming form exists.
+            Node::Convolve { .. } => {
+                out.push(StreamBlocker::OfflineEffect { name: "convolve" });
+            }
+            Node::Granular { .. } => {
+                out.push(StreamBlocker::OfflineEffect { name: "granular" });
             }
             _ => {}
         });

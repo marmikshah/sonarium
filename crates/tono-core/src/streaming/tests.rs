@@ -603,6 +603,18 @@ fn blockers_names_every_reason_with_a_fix() {
                 { "type":"lowpass", "cutoff": { "lfo": { "rate":2, "depth":400, "center":800 } } } ] } }"#,
             StreamBlocker::ModulatedFilter,
         ),
+        (
+            r#"{ "name":"cv", "duration":0.1, "root": { "type":"chain", "stages": [
+                { "type":"impact", "hardness":0.8 },
+                { "type":"convolve", "decay":0.8, "mix":0.5 } ] } }"#,
+            StreamBlocker::OfflineEffect { name: "convolve" },
+        ),
+        (
+            r#"{ "name":"gr", "duration":0.1, "root": { "type":"chain", "stages": [
+                { "type":"sine", "freq":220 },
+                { "type":"granular", "grain_ms":60, "density":30 } ] } }"#,
+            StreamBlocker::OfflineEffect { name: "granular" },
+        ),
     ];
     for (json, want) in cases {
         let doc = parse(json);
@@ -639,6 +651,12 @@ fn blockers_agrees_with_try_from_doc() {
             { "node": { "type":"sine", "freq":440 } } ] } }"#,
         r#"{ "name":"e", "duration":0.1, "engine":1,
             "root": { "type":"dust", "density":40, "decay":0.02 } }"#,
+        r#"{ "name":"f", "duration":0.1, "root": { "type":"chain", "stages": [
+            { "type":"impact" },
+            { "type":"convolve" } ] } }"#,
+        r#"{ "name":"g", "duration":0.1, "root": { "type":"chain", "stages": [
+            { "type":"sine", "freq":220 },
+            { "type":"granular" } ] } }"#,
     ];
     for json in blocked {
         let doc = parse(json);
