@@ -147,7 +147,8 @@ fn transpose(node: &mut Node, ratio: f32) {
         | Node::Sawtooth { freq }
         | Node::Square { freq, .. }
         | Node::Fm { freq, .. }
-        | Node::Super { freq, .. } => scale(freq, ratio),
+        | Node::Super { freq, .. }
+        | Node::Wavetable { freq, .. } => scale(freq, ratio),
         // Pitch-determining processors: the ring-mod carrier and the modal
         // body's resonant partials must track the note, or a bell/metallic patch
         // plays the same pitch for every key.

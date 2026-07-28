@@ -1327,3 +1327,52 @@ fn loudness_gated_tolerates_mismatched_channel_lengths() {
     let l = crate::dsp::loudness_lufs_gated(&[&a, &b], 44_100);
     assert!(l.is_finite());
 }
+
+#[test]
+fn wavetable_position_morphs_the_spectrum() {
+    let at = |pos: &str| {
+        doc(&format!(
+            r#"{{ "name": "w", "duration": 0.5, "root": {{ "type": "wavetable",
+                     "wave": "basic", "freq": 220, "position": {pos} }} }}"#
+        ))
+    };
+    let centroid = |d: SoundDoc| {
+        let s = render_graph(&d);
+        crate::analysis::stats(&s, 44_100).spectral_centroid_hz
+    };
+    let dark = centroid(at("0.0")); // the sine frame
+    let bright = centroid(at("1.0")); // the saw frame
+    assert!(
+        dark < bright,
+        "basic at 0.0 ({dark} Hz) should be darker than at 1.0 ({bright} Hz)"
+    );
+}
+
+#[test]
+fn wavetable_is_deterministic_and_finite_at_extremes() {
+    // Determinism: the same doc (modulated morph, note-name freq) renders
+    // bit-equal twice.
+    let d = doc(r#"{ "name": "w", "duration": 0.1, "seed": 3, "root":
+             { "type": "wavetable", "wave": "formant", "freq": "A3",
+               "position": { "lfo": { "shape": "sine", "rate": 5, "depth": 0.5, "center": 0.5 } } } }"#);
+    let a = render_graph(&d);
+    let b = render_graph(&d);
+    let bits = |s: &[f32]| s.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&a), bits(&b), "same doc renders bit-identically");
+
+    // Extreme frequencies and positions stay finite on every table.
+    for wave in ["basic", "harmonics", "formant", "metallic"] {
+        for (freq, pos) in [("1.0", "0.0"), ("20000.0", "1.0"), ("100000.0", "0.5")] {
+            let d = doc(&format!(
+                r#"{{ "name": "w", "duration": 0.02, "root": {{ "type": "wavetable",
+                         "wave": "{wave}", "freq": {freq}, "position": {pos} }} }}"#
+            ));
+            let s = render_graph(&d);
+            assert!(
+                s.iter().all(|x| x.is_finite()),
+                "{wave} at {freq} Hz / position {pos}: non-finite sample"
+            );
+        }
+    }
+}
+

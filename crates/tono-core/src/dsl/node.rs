@@ -3,7 +3,7 @@
 
 use super::{
     Adsr, DriveShape, KitStyle, Mode, NoiseColor, SeqNote, SeqWave, SuperWave, Track, Value,
-    default_gain,
+    WavetableKind, default_gain,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 // origins: q 0.707 is Butterworth (maximally flat).
 fn default_duty() -> Value {
     Value::Const(0.5)
+}
+// Wavetable morph starts at the first (darkest) sub-wave.
+fn default_wavetable_position() -> Value {
+    Value::Const(0.0)
 }
 fn default_q() -> f32 {
     0.707
@@ -214,6 +218,24 @@ pub enum Node {
         /// Total detune spread in cents across all voices.
         #[serde(default = "default_detune")]
         detune_cents: f32,
+    },
+    /// Morphing wavetable oscillator: `position` (0..1) sweeps across an
+    /// ordered set of built-in, single-cycle tables (see [`WavetableKind`]),
+    /// crossfading between adjacent sub-waves — the classic wavetable sweep.
+    /// Modulate `position` (an `lfo` or `env`) for the signature moving timbre:
+    /// a vocal morph on `formant`, a brightness swell on `harmonics`. Tables
+    /// are generated deterministically at build time (additive, band-limited to
+    /// 32 partials — darker sub-waves use fewer), so no table files are needed;
+    /// very high pitches at bright positions can fold.
+    Wavetable {
+        /// Which table set to morph across.
+        #[serde(default)]
+        wave: WavetableKind,
+        /// Frequency in Hz (modulatable).
+        freq: Value,
+        /// Morph position across the sub-waves, 0..1 (modulatable).
+        #[serde(default = "default_wavetable_position")]
+        position: Value,
     },
     /// A note sequencer: plays `notes` on a tempo grid, each with its own pitch,
     /// length, and a shared per-note ADSR. This is how you write real melodies,
@@ -618,6 +640,7 @@ impl Node {
             | Node::Noise { .. }
             | Node::Fm { .. }
             | Node::Super { .. }
+            | Node::Wavetable { .. }
             | Node::Seq { .. }
             | Node::Impact { .. }
             | Node::Dust { .. }
@@ -665,6 +688,7 @@ impl Node {
             | Node::Noise { .. }
             | Node::Fm { .. }
             | Node::Super { .. }
+            | Node::Wavetable { .. }
             | Node::Seq { .. }
             | Node::Impact { .. }
             | Node::Dust { .. }
