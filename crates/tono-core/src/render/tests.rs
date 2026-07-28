@@ -287,6 +287,47 @@ fn chain_processors_transform_in_series() {
 }
 
 #[test]
+fn tremolo_at_full_depth_modulates_the_envelope() {
+    // depth 1 swings the gain between 0 and 1 at `rate` Hz: windows near the
+    // trough are almost silent, windows near the peak stay at full level.
+    let d = doc(
+        r#"{ "name": "n", "duration": 1.0, "root": { "type": "chain", "stages": [
+                { "type": "sine", "freq": 440 },
+                { "type": "tremolo", "rate": 5.0, "depth": 1.0 }
+            ] } }"#,
+    );
+    let s = render(&d);
+    let mut min = f32::INFINITY;
+    let mut max = 0.0f32;
+    // 1102 samples ≈ 0.025 s — an eighth of the 5 Hz tremolo period.
+    for chunk in s.chunks(1102) {
+        let r = rms(chunk);
+        min = min.min(r);
+        max = max.max(r);
+    }
+    assert!(max > 0.5, "peak windows stay loud, max window rms {max}");
+    assert!(
+        min < 0.1,
+        "trough windows nearly silent, min window rms {min}"
+    );
+}
+
+#[test]
+fn tremolo_at_zero_depth_is_a_transparent_passthrough() {
+    // gain = 1 - 0 * lfo = 1.0 exactly, so a chain with a depth-0 tremolo
+    // renders byte-identically to the bare source.
+    let plain = doc(r#"{ "name": "n", "duration": 0.2, "seed": 3,
+                 "root": { "type": "sine", "freq": 440 } }"#);
+    let through = doc(r#"{ "name": "n", "duration": 0.2, "seed": 3,
+                 "root": { "type": "chain", "stages": [
+                     { "type": "sine", "freq": 440 },
+                     { "type": "tremolo", "rate": 6.0, "depth": 0.0 }
+                 ] } }"#);
+    let bits = |s: &[f32]| s.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&render(&plain)), bits(&render(&through)));
+}
+
+#[test]
 fn bitcrush_quantizes_amplitude() {
     // The gain stage keeps the crushed peak under the output ceiling so the
     // safety limit stays out of the way and the levels survive untouched.

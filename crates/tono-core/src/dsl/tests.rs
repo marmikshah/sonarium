@@ -108,6 +108,42 @@ fn modal_and_impact_validate_their_ranges() {
 }
 
 #[test]
+fn tremolo_defaults_and_validates_its_bounds() {
+    // `"type": "tremolo"` alone is valid: rate 6 Hz, depth 0.5.
+    let d = doc_with_root(
+        r#"{ "type": "chain", "stages": [
+                { "type": "sine", "freq": 220 },
+                { "type": "tremolo" } ] }"#,
+    );
+    assert_eq!(d.validate(), Ok(()));
+    let Node::Chain { stages } = &d.root else {
+        panic!("still a chain");
+    };
+    let Node::Tremolo { rate, depth } = &stages[1] else {
+        panic!("still a tremolo");
+    };
+    assert_eq!(*rate, 6.0);
+    assert_eq!(*depth, 0.5);
+
+    let trem = |rate: &str, depth: &str| {
+        doc_with_root(&format!(
+            r#"{{ "type": "chain", "stages": [
+                    {{ "type": "sine", "freq": 220 }},
+                    {{ "type": "tremolo", "rate": {rate}, "depth": {depth} }} ] }}"#
+        ))
+        .validate()
+    };
+    assert!(trem("0.0", "1.0").is_ok());
+    assert!(trem("40.0", "0.0").is_ok());
+    assert!(trem("-1", "0.5").unwrap_err().contains("tremolo.rate"));
+    assert!(trem("41", "0.5").unwrap_err().contains("tremolo.rate"));
+    // 1e308 deserializes to f32 inf — the finite check fires first.
+    assert!(trem("1e308", "0.5").unwrap_err().contains("tremolo.rate"));
+    assert!(trem("6", "1.5").unwrap_err().contains("tremolo.depth"));
+    assert!(trem("6", "-0.1").unwrap_err().contains("tremolo.depth"));
+}
+
+#[test]
 fn dust_and_rand_validate_their_ranges() {
     // dust: density must be positive, decay non-negative.
     assert!(

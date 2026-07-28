@@ -78,6 +78,11 @@ pub(super) enum Proc {
         freq: Val,
         srf: f32,
     },
+    Tremolo {
+        rate: f32,
+        depth: f32,
+        srf: f32,
+    },
     Chorus {
         buf: Vec<f32>,
         w: usize,
@@ -238,6 +243,11 @@ impl Proc {
                 *phase += freq.eval(t).max(0.0) * pitch / *srf;
                 *phase -= phase.floor();
                 out
+            }
+            Proc::Tremolo { rate, depth, srf } => {
+                // Closed form of the absolute sample index — block-size
+                // independent by construction, the offline path's expression.
+                x0 * (1.0 - *depth * (0.5 + 0.5 * (TAU * *rate * t as f32 / *srf).sin()))
             }
             Proc::Chorus {
                 buf,
@@ -485,6 +495,11 @@ pub(super) fn try_proc(node: &Node, sr: u32, n: usize, engine: u32, path: u64) -
         Node::RingMod { freq } => Proc::RingMod {
             phase: 0.0,
             freq: v(freq),
+            srf,
+        },
+        Node::Tremolo { rate, depth } => Proc::Tremolo {
+            rate: *rate,
+            depth: *depth,
             srf,
         },
         Node::Chorus { rate, depth, mix } => {

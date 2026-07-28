@@ -281,6 +281,11 @@ fn mutate_node(node: &mut Node, amount: f32, rng: &mut Rng) {
             *decay = jitter(*decay, amount, rng, 0.0);
         }
         Node::RingMod { freq } => mutate_freq(freq, amount, rng),
+        Node::Tremolo { rate, depth } => {
+            // .min(40.0): the validation cap on the LFO rate.
+            *rate = jitter(*rate, amount, rng, 0.01).min(40.0);
+            *depth = jitter_unit(*depth, amount, rng);
+        }
         Node::Chorus { rate, depth, mix } => {
             *rate = jitter(*rate, amount, rng, 0.01);
             *depth = jitter_unit(*depth, amount, rng);
@@ -373,6 +378,22 @@ mod tests {
                 { "type": "lowpass",
                   "cutoff": { "rand": { "from": 200, "to": 1200, "rate": 9000 } } },
                 { "type": "delay", "secs": 25.0, "feedback": 0.4 }
+            ] } }"#,
+        )
+        .unwrap();
+        for seed in 0..50 {
+            let m = mutate(&d, 1.0, seed);
+            m.validate().unwrap_or_else(|e| panic!("seed {seed}: {e}"));
+        }
+    }
+
+    #[test]
+    fn mutate_stays_valid_with_a_tremolo() {
+        // rate near the 40 Hz cap exercises the validation-bound clamp.
+        let d: SoundDoc = serde_json::from_str(
+            r#"{ "name": "t", "duration": 0.3, "root": { "type": "chain", "stages": [
+                { "type": "sine", "freq": 220 },
+                { "type": "tremolo", "rate": 38.0, "depth": 0.9 }
             ] } }"#,
         )
         .unwrap();

@@ -334,6 +334,7 @@ reproducible.
   bell; raise `hardness` toward 1 to wake the upper modes. `tono_core::vary::mutate`
   then gives a non-repeating round-robin of hits.
 - **Width / thickening:** `chorus{rate,depth,mix}` on pads and leads.
+- **Tremolo (streamable amp wobble):** `tremolo{rate,depth}` — gain swings between `1-depth` and 1 at `rate` Hz (defaults 6 / 0.5). Unlike a modulated `gain` (which renders offline but can't stream), tremolo is a closed form of the absolute sample index, so it streams natively and byte-identically to the offline render.
 - **Glue & loudness:** end a busy chain with `compress{threshold,ratio,attack,release,makeup}`. Watch the
   stats: keep `true_peak_dbfs` below 0, use `loudness_lufs` to match levels across a set, and read
   `crest_factor_db` (big = punchy transient, small = dense/compressed).

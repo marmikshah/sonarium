@@ -752,6 +752,14 @@ fn validate_node_at(node: &Node, depth: usize) -> Result<(), String> {
         }
         Node::Drive { amount, .. } => validate_value(amount, "drive.amount"),
         Node::RingMod { freq } => validate_freq_value(freq, "ringmod.freq"),
+        Node::Tremolo { rate, depth } => {
+            finite("tremolo.rate", *rate)?;
+            // 40 Hz is already fast enough to read as a tone, not a tremolo.
+            if !(0.0..=40.0).contains(rate) {
+                return Err(format!("tremolo.rate must be in [0, 40] Hz, got {rate}"));
+            }
+            in_unit("tremolo.depth", *depth)
+        }
         Node::Chorus { rate, depth, mix } => {
             positive("chorus.rate", *rate)?;
             in_unit("chorus.depth", *depth)?;

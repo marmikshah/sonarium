@@ -365,6 +365,20 @@ fn apply_processor(
             }
             out
         }
+        Node::Tremolo { rate, depth } => {
+            // Phase derives from each sample's absolute index (t = i/sr),
+            // never an accumulator — the streaming path evaluates the same
+            // closed form at its absolute position, byte-identical at any
+            // block size.
+            let srf = sr as f32;
+            input
+                .iter()
+                .enumerate()
+                .map(|(i, &x)| {
+                    x * (1.0 - *depth * (0.5 + 0.5 * (TAU * *rate * i as f32 / srf).sin()))
+                })
+                .collect()
+        }
         Node::Chorus { rate, depth, mix } => chorus(input, *rate, *depth, *mix, sr),
         Node::Flanger {
             rate,
