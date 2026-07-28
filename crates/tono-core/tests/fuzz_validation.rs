@@ -20,16 +20,14 @@
 //! stay tiny and sample rates in a sane band, so even the "valid" renders are
 //! fast; the case budget is 64, matching the repo's frugal test times.
 //!
-//! Two genuine contract violations were found and are pinned by `#[ignore]`d
-//! repro tests below (the engine is deliberately NOT fixed here):
-//! `lane_for` panics on a single-point tracks automation lane with a NaN time
-//! (`known_violation_single_point_nan_lane_panics_the_tracks_renderer`), and
-//! `vary::mutate`'s jitter overflows uncapped-above parameters to inf,
-//! breaking its still-valid promise
-//! (`known_violation_mutate_overflows_uncapped_params_to_inf`).
-//!
-//! The property tests exclude exactly those input classes and fuzz everything
-//! around them.
+//! Two genuine contract violations were found by this suite and fixed: a
+//! single-point tracks automation lane with a NaN time panicked `lane_for`
+//! (render/tracks.rs), and `vary::mutate`'s jitter overflowed uncapped-above
+//! parameters to inf, breaking its still-valid promise. Both fixes are pinned
+//! by the regression tests at the bottom of this file
+//! (`single_point_nan_lane_renders_without_panic`,
+//! `mutate_clamps_uncapped_params_to_finite`), and the properties fuzz the
+//! formerly-excluded input classes along with everything else.
 
 use proptest::prelude::*;
 use serde_json::{Value as J, json};
@@ -1039,65 +1037,16 @@ fn poison_doc(doc: &mut SoundDoc, x: f32) {
 
 // --- The properties --------------------------------------------------------
 
-/// True when any numeric field of the document sits in mutate's f32-overflow
-/// regime (|v| > f32::MAX / 2 ≈ 1.7e38): mutate's multiplicative jitter
-/// (× up to `1 + amount`) pushes such a value to ±inf, and any field that
-/// validation bounds only from BELOW (e.g. `modal.modes[].decay` — finite,
-/// positive, uncapped above) then fails validation on the mutated doc,
-/// breaking mutate's documented "stays valid" promise. The known violation is
-/// pinned by the `#[ignore]`d repro test further down; excluded here so the
-/// rest of the input space keeps being fuzzed.
-fn has_overflow_regime_param(doc: &SoundDoc) -> bool {
-    fn big(v: &J) -> bool {
-        match v {
-            J::Number(n) => n.as_f64().is_some_and(|x| x.abs() > 1.7e38),
-            J::Array(a) => a.iter().any(big),
-            J::Object(o) => o.values().any(big),
-            _ => false,
-        }
-    }
-    big(&serde_json::to_value(doc).expect("SoundDoc serializes"))
-}
-
-/// True when `doc` trips the known, reported violation pinned by the
-/// `#[ignore]`d repro test below: a tracks automation lane with exactly ONE
-/// breakpoint reaches `lane_for`'s segment scan (`render/tracks.rs`), which
-/// indexes `pts[idx + 1]` past the end whenever the scan is entered — i.e.
-/// when the point's `t` is NaN, or when the sample time itself is NaN
-/// (`sample_rate == 0` ⇒ `t = 0.0/0.0`). Excluded here so the rest of the
-/// input space keeps being fuzzed around it.
-fn hits_known_lane_panic(doc: &SoundDoc) -> bool {
-    let Node::Tracks { tracks, .. } = &doc.root else {
-        return false;
-    };
-    tracks.iter().any(|t| {
-        t.automation
-            .iter()
-            .any(|l| l.points.len() == 1 && (l.points[0].t.is_nan() || doc.sample_rate == 0))
-    })
-}
-
-/// KNOWN CONTRACT VIOLATION — reported, engine deliberately NOT fixed here.
-///
-/// An unvalidated `tracks` document whose automation lane has exactly one
-/// point with a NaN time panics the renderer: `lane_for`
-/// (crates/tono-core/src/render/tracks.rs) falls through both early-return
-/// comparisons (`t <= pts[0].t` and `t >= last.t` are both false for NaN) and
-/// evaluates `pts[idx + 1]` with `idx == 0` on a 1-element vec — "index out
-/// of bounds: the len is 1 but the index is 1". The same panic fires for a
-/// finite point time when `sample_rate == 0` (the per-sample `t` is NaN).
-/// Validation rejects both inputs ("automation[gain].points[0].t must be >= 0
-/// seconds, got NaN" / "sample_rate must be in [8000, 192000] Hz"), so a
-/// validated document can never hit it — but the crate's stated contract is
-/// that an UNVALIDATED document can't panic the renderer. serde_json can't
-/// carry NaN, so the NaN form only arrives via a programmatically-built doc.
-///
-/// Found by `unvalidated_docs_render_without_panic_and_finite_output`
-/// (proptest). Run this test with `-- --ignored` to reproduce the panic;
-/// un-ignore once `lane_for` guards the 1-point scan.
+/// Regression for a violation this suite found: an unvalidated `tracks`
+/// document whose automation lane has exactly one point with a NaN time used
+/// to panic the renderer — `lane_for` fell through both early-return
+/// comparisons (NaN compares false) and indexed `pts[idx + 1]` on a
+/// 1-element vec. Validation rejects the input ("automation[gain].points[0].t
+/// must be >= 0 seconds, got NaN"), but the crate's contract is that an
+/// UNVALIDATED document can't panic the renderer. serde_json can't carry NaN,
+/// so the NaN form only arrives via a programmatically-built doc.
 #[test]
-#[ignore = "known violation: tracks lane_for indexes past a single NaN-timed point"]
-fn known_violation_single_point_nan_lane_panics_the_tracks_renderer() {
+fn single_point_nan_lane_renders_without_panic() {
     let mut doc: SoundDoc = serde_json::from_str(
         r#"{ "name": "repro", "duration": 0.05,
             "root": { "type": "tracks", "tracks": [
@@ -1114,28 +1063,21 @@ fn known_violation_single_point_nan_lane_panics_the_tracks_renderer() {
         doc.validate().is_err(),
         "validation must reject the NaN time"
     );
-    // The unvalidated-render contract: must not panic. Today it does.
-    let _ = render::render_product(&doc);
+    // The unvalidated-render contract: no panic (a single breakpoint holds
+    // flat — the only sane semantics, and now the guard).
+    let product = render::render_product(&doc);
+    assert!(product.mono.iter().all(|s| s.is_finite()));
 }
 
-/// KNOWN CONTRACT VIOLATION #2 — reported, engine deliberately NOT fixed here.
-///
-/// `vary::mutate` documents "Ranges are clamped so the result stays valid",
-/// but its multiplicative jitter (`v * (1 + rng.bi() * amount)`, up to ×2)
-/// overflows f32 to ±inf for any parameter that validation bounds only from
-/// BELOW — e.g. `modal.modes[].decay` (finite + positive, uncapped above).
-/// The shrunk case below: decay 3.4e38 validates; after
-/// `mutate(doc, 0.7495734, 0)` it is `inf` and the mutated doc fails
-/// validation with "modal.modes[0].decay must be a finite number, got inf".
-/// The same hazard applies to every uncapped-above field mutate scales
-/// (modal freq/decay, dust density/decay, q, chorus/flanger/phaser rates,
-/// ADSR times, gain/drive amounts, lfo/arp/slide/rand values, …).
-///
-/// Found by `mutate_preserves_validity` (proptest). Run with `-- --ignored`
-/// to reproduce; un-ignore once mutate's jitter clamps to a finite range.
+/// Regression for a violation this suite found: `vary::mutate`'s
+/// multiplicative jitter (`v * (1 + rng.bi() * amount)`, up to ×2) overflowed
+/// f32 to ±inf for any parameter validation bounds only from BELOW (e.g.
+/// `modal.modes[].decay` — finite, positive, uncapped above), breaking its
+/// documented "stays valid" promise. The jitter now clamps to `[min,
+/// f32::MAX]`. Shrunk case: decay 3.4e38 validates; `mutate(doc, 0.7495734,
+/// 0)` used to make it inf.
 #[test]
-#[ignore = "known violation: mutate's jitter overflows uncapped-above params to inf"]
-fn known_violation_mutate_overflows_uncapped_params_to_inf() {
+fn mutate_clamps_uncapped_params_to_finite() {
     let doc: SoundDoc = serde_json::from_str(
         r#"{ "name": "repro", "duration": 0.05, "sample_rate": 8000,
             "root": { "type": "chain", "stages": [
@@ -1215,10 +1157,6 @@ proptest! {
         };
         prop_assume!(estimated_samples(&doc) <= 50_000.0);
         poison_doc(&mut doc, poison);
-        // Exclude the one input class with a known, reported violation
-        // (pinned by the #[ignore]d repro test below); everything else in
-        // the space must satisfy the contract.
-        prop_assume!(!hits_known_lane_panic(&doc));
         let _ = doc.validate(); // must not panic, whichever way it decides
         let product = render::render_product(&doc); // must not panic
         assert_product_finite(&product)?;
@@ -1238,10 +1176,6 @@ proptest! {
         if doc.validate().is_err() {
             return Ok(());
         }
-        // Exclude the one input class with a known, reported violation
-        // (pinned by the #[ignore]d repro test below): mutate's jitter
-        // overflows an uncapped-above parameter to inf.
-        prop_assume!(!has_overflow_regime_param(&doc));
         for seed in seeds {
             let mutated = vary::mutate(&doc, amount, seed);
             prop_assert!(

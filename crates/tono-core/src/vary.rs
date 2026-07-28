@@ -113,9 +113,12 @@ pub fn mutate(doc: &SoundDoc, amount: f32, seed: u64) -> SoundDoc {
     out
 }
 
-/// Scale `v` by a random factor within ±amount, never below `min`.
+/// Scale `v` by a random factor within ±amount, clamped into `[min,
+/// f32::MAX]`: an uncapped param near the f32 ceiling must overflow to the
+/// ceiling, not to ±inf — `mutate` promises a still-valid document, and
+/// validation requires finite.
 fn jitter(v: f32, amount: f32, rng: &mut Rng, min: f32) -> f32 {
-    (v * (1.0 + rng.bi() * amount)).max(min)
+    (v * (1.0 + rng.bi() * amount)).clamp(min, f32::MAX)
 }
 
 fn jitter_unit(v: f32, amount: f32, rng: &mut Rng) -> f32 {
