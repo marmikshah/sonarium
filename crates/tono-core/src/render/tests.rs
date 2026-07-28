@@ -1376,3 +1376,89 @@ fn wavetable_is_deterministic_and_finite_at_extremes() {
     }
 }
 
+/// Tracks-level sidechain: the pad (hard right, so the right channel is the
+/// pad alone) follows the kick (hard left). Right after each kick hit the
+/// pad's level is pulled down versus the same window in an unducked render —
+/// the pump is measurable on the bus.
+#[test]
+fn tracks_sidechain_pumps_the_follower() {
+    // 120 bpm, 1 step/beat ⇒ a hit at 0.0 s and 0.5 s.
+    let mk = |sidechain: &str| {
+        doc(&format!(
+            r#"{{ "name": "t", "duration": 1.0, "seed": 5, "version": 2,
+                    "root": {{ "type": "tracks", "tracks": [
+                        {{ "id": "kick", "pan": -1.0,
+                          "node": {{ "type": "seq", "bpm": 120, "steps_per_beat": 1, "wave": "sine",
+                            "env": {{ "a": 0.001, "d": 0.12, "s": 0.0, "r": 0.02 }},
+                            "notes": [ {{ "step": 0, "len": 1, "pitch": "A1" }},
+                                       {{ "step": 1, "len": 1, "pitch": "A1" }} ] }} }},
+                        {{ "id": "pad", "pan": 1.0, "gain": 0.5, {sidechain}
+                          "node": {{ "type": "sine", "freq": 220 }} }}
+                    ] }} }}"#
+        ))
+    };
+    let ducked = render_tracks(&mk(
+        r#""sidechain": { "source": "kick", "amount": 0.9, "release": 0.08 },"#,
+    ))
+    .unwrap();
+    let open = render_tracks(&mk("")).unwrap();
+    let sr = 44_100.0;
+    let win = |s: &[f32], from: f32, to: f32| rms(&s[(from * sr) as usize..(to * sr) as usize]);
+    for hit in [0.0f32, 0.5] {
+        let (d, o) = (
+            win(&ducked.right, hit + 0.01, hit + 0.05),
+            win(&open.right, hit + 0.01, hit + 0.05),
+        );
+        assert!(
+            d < o * 0.4,
+            "the ~50 ms after the hit at {hit}: ducked rms {d} vs open rms {o}"
+        );
+    }
+    // Mid-gap the envelope has released and the pad is back at full level.
+    let (d, o) = (win(&ducked.right, 0.7, 0.8), win(&open.right, 0.7, 0.8));
+    assert!(d > o * 0.8, "mid-gap the duck is open: rms {d} vs open {o}");
+    // The source renders untouched: its measured bus contribution (peak and
+    // RMS stats) is identical whether or not a follower is attached.
+    assert_eq!(ducked.layers[0].peak_dbfs, open.layers[0].peak_dbfs);
+    assert_eq!(ducked.layers[0].rms_dbfs, open.layers[0].rms_dbfs);
+}
+
+/// amount 0 means no ducking: the render is bit-identical to the same
+/// document without the sidechain field. (The follower is declared FIRST, so
+/// this also proves render order does not depend on declaration order.)
+#[test]
+fn tracks_sidechain_amount_zero_is_byte_identical() {
+    let with = doc(r#"{ "name": "t", "duration": 0.3, "seed": 2, "version": 2,
+            "root": { "type": "tracks", "tracks": [
+                { "id": "pad", "node": { "type": "sine", "freq": 220 }, "gain": 0.5,
+                  "sidechain": { "source": "kick", "amount": 0.0 } },
+                { "id": "kick", "node": { "type": "noise" }, "gain": 0.5 }
+            ] } }"#);
+    let without = doc(r#"{ "name": "t", "duration": 0.3, "seed": 2, "version": 2,
+            "root": { "type": "tracks", "tracks": [
+                { "id": "pad", "node": { "type": "sine", "freq": 220 }, "gain": 0.5 },
+                { "id": "kick", "node": { "type": "noise" }, "gain": 0.5 }
+            ] } }"#);
+    let (a, b) = (
+        render_tracks(&with).unwrap(),
+        render_tracks(&without).unwrap(),
+    );
+    let bits = |s: &[f32]| s.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&a.left), bits(&b.left), "left byte-identical");
+    assert_eq!(bits(&a.right), bits(&b.right), "right byte-identical");
+}
+
+/// The duck envelope is computed causally from the source's rendered signal —
+/// no randomness — so a sidechained document renders bit-identically twice.
+#[test]
+fn tracks_sidechain_is_deterministic() {
+    let d = doc(r#"{ "name": "t", "duration": 0.3, "seed": 11, "version": 2,
+            "root": { "type": "tracks", "tracks": [
+                { "id": "kick", "node": { "type": "noise" }, "gain": 0.5 },
+                { "id": "pad", "node": { "type": "sine", "freq": 220 }, "gain": 0.5,
+                  "sidechain": { "source": "kick", "amount": 0.8 } }
+            ] } }"#);
+    let a = render_tracks(&d).unwrap();
+    let b = render_tracks(&d).unwrap();
+    assert_eq!(a, b, "two renders are bit-identical");
+}

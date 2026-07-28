@@ -399,6 +399,27 @@ editing one track never changes a sibling's noise grains. Duplicating a track
 under a new `id` is a built-in variation — the copy re-grains its noise
 deterministically from the new id.
 
+**Sidechain ducking between tracks:** a track can carry a `sidechain` that
+pulls its level down whenever another track sounds — the classic kick→bass
+pump, without nesting a `duck` node. `source` is the driving track's `id`;
+`amount` (0..1, default 0.8) is the depth, `attack`/`release` (defaults
+0.005 / 0.25 s) the ballistics — the same envelope follower the `duck` node
+uses, so the pump character matches. The source renders untouched; only the
+follower dips, and it ducks when the source actually lands on the bus (the
+source's `at` offset is honored). Several tracks may follow one source, but a
+source must be a plain track (no follower-of-follower chains — duck directly
+to the source's source):
+```json
+{ "name": "pump", "duration": 2.0, "version": 2, "root": { "type": "tracks", "tracks": [
+    { "id": "kick", "node": { "type": "seq", "bpm": 120, "steps_per_beat": 1, "wave": "sine",
+        "env": { "a": 0.001, "d": 0.12, "s": 0.0, "r": 0.02 },
+        "notes": [ { "step": 0, "len": 1, "pitch": "A1" }, { "step": 1, "len": 1, "pitch": "A1" } ] } },
+    { "id": "pad", "gain": 0.5,
+      "sidechain": { "source": "kick", "amount": 0.8, "release": 0.2 },
+      "node": { "type": "sawtooth", "freq": 110 } }
+] } }
+```
+
 ## Level-matched, click-safe output
 
 Add a top-level `normalize` to gain-match to a loudness target and brick-wall

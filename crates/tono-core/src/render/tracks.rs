@@ -7,8 +7,23 @@ use super::output::{make_loop_buffer, normalize_output, normalize_output_v4};
 #[cfg(feature = "sampler")]
 use super::seq::{SeqVoice, sampler_seq_stereo};
 use super::{Signal, apply_processor, render_node};
-use crate::dsl::{AutoLane, AutoTarget, Node, Playback, SeqWave, SoundDoc};
+use crate::dsl::{AutoLane, AutoTarget, Node, Playback, SeqWave, Sidechain, SoundDoc, Track};
 use crate::dsp::{Rng, layer_stream_key, peak_limit};
+
+/// One track's raw render, kept whole until the mix pass so sidechain
+/// followers can read their source's signal regardless of declaration order.
+enum TrackRender {
+    /// Muted layers render nothing (a v1 document still advanced its stream).
+    Muted,
+    /// A mono render plus its `at` offset in samples.
+    Mono { off: usize, sig: Signal },
+    /// A native-stereo (sampler) render plus its `at` offset in samples.
+    Stereo {
+        off: usize,
+        left: Signal,
+        right: Signal,
+    },
+}
 
 /// Equal-power channel gains for a `pan`/`gain` pair — one formula for the
 /// constant fast path and the per-sample automated path, so they can never
@@ -122,6 +137,58 @@ fn lane_for(
     )
 }
 
+/// The gain-reduction envelope for one follower track: the `duck` node's
+/// exact attack/release follower (same coefficients, same recurrence), so a
+/// mixer-level pump matches the node-level one. It is driven by the source
+/// track's positioned (post-`at`) mono signal scaled by the source's gain
+/// fader — pre-pan, pre-master: the source as it actually lands on the bus,
+/// so the follower ducks when the source sounds, not when its node starts.
+/// A muted source is silence, so the envelope stays fully open.
+fn duck_envelope(
+    source: &TrackRender,
+    source_track: &Track,
+    sc: &Sidechain,
+    n: usize,
+    sr: u32,
+) -> Vec<f32> {
+    let mut sig = vec![0.0f32; n];
+    let gain_lane = lane_for(
+        &source_track.automation,
+        AutoTarget::Gain,
+        n,
+        sr,
+        source_track.gain,
+    );
+    let g = |pos: usize| gain_lane.as_ref().map_or(source_track.gain, |a| a[pos]);
+    match source {
+        TrackRender::Muted => {}
+        TrackRender::Mono { off, sig: mono } => {
+            for (i, x) in mono.iter().take(n - off).enumerate() {
+                sig[i + off] = x * g(i + off);
+            }
+        }
+        TrackRender::Stereo { off, left, right } => {
+            // A native-stereo (sampler) source steers the follower with its
+            // mid signal — the mono of the recorded image.
+            for i in 0..n - off {
+                sig[i + off] = 0.5 * (left[i] + right[i]) * g(i + off);
+            }
+        }
+    }
+    let srf = sr as f32;
+    let at = (-1.0 / (sc.attack.max(1e-4) * srf)).exp();
+    let rt = (-1.0 / (sc.release.max(1e-4) * srf)).exp();
+    let mut env = 0.0f32;
+    sig.into_iter()
+        .map(|t| {
+            let rect = t.abs().min(1.0);
+            let coeff = if rect > env { at } else { rt };
+            env = rect + coeff * (env - rect);
+            1.0 - sc.amount * env
+        })
+        .collect()
+}
+
 /// Render a `tracks` document to a finished stereo pair: each track is
 /// rendered mono and equal-power panned onto the bus (sampler tracks keep
 /// their native stereo), the master chain runs per channel (the reverb with
@@ -144,14 +211,20 @@ pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
     let engine = doc.effective_engine();
     let mut rng = Rng::new(doc.seed);
     let (mut left, mut right) = (vec![0.0f32; n], vec![0.0f32; n]);
-    let mut layers = Vec::with_capacity(tracks.len());
-    let mut energies = Vec::with_capacity(tracks.len());
+    // Pass 1 — render every track's raw node output in declaration order. All
+    // RNG consumption lives here (v1's shared stream threads through the track
+    // list exactly as it always has; v2 uses id-keyed streams), so the mix
+    // pass below touches no randomness and sidechain followers can read their
+    // source's signal regardless of declaration order.
+    let mut layer_ids = Vec::with_capacity(tracks.len());
+    let mut rendered = Vec::with_capacity(tracks.len());
     for (ti, t) in tracks.iter().enumerate() {
         let layer_id = t.id.clone().unwrap_or_else(|| format!("layer_{ti}"));
         // v2 streams are keyed by the stable layer id. The fallback hashes the
         // exact id `ensure_track_ids` will backfill, so a document's noise is
         // identical before and after the backfill pass.
         let stream = layer_stream_key(&layer_id);
+        layer_ids.push(layer_id);
         if t.mute {
             // Muted layers stay off the bus. v1's single stream must still
             // advance exactly as if the track had rendered, or muting one
@@ -167,6 +240,37 @@ pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
                     track_stream_seed(doc.seed, stream),
                 );
             }
+            rendered.push(TrackRender::Muted);
+            continue;
+        }
+        // The layer lands `at` seconds into the song: render full-length, then
+        // shift right and truncate (never shortening the render keeps RNG
+        // consumption — and therefore v1 sibling content — offset-invariant).
+        let off = ((t.at.max(0.0) * sr as f32).round() as usize).min(n);
+        if let Some((l, r)) = track_native_stereo(&t.node, n, sr) {
+            rendered.push(TrackRender::Stereo {
+                off,
+                left: l,
+                right: r,
+            });
+        } else {
+            let base = track_stream_seed(doc.seed, stream);
+            let mono = if per_track_streams {
+                let mut trng = Rng::new(base);
+                render_node(&t.node, n, sr, &mut trng, engine, base)
+            } else {
+                render_node(&t.node, n, sr, &mut rng, engine, base)
+            };
+            rendered.push(TrackRender::Mono { off, sig: mono });
+        }
+    }
+    // Pass 2 — mix onto the bus: pan/gain (static or automated), the
+    // sidechain duck, and the per-layer contribution stats.
+    let mut layers = Vec::with_capacity(tracks.len());
+    let mut energies = Vec::with_capacity(tracks.len());
+    for (ti, t) in tracks.iter().enumerate() {
+        let layer_id = layer_ids[ti].clone();
+        if let TrackRender::Muted = &rendered[ti] {
             layers.push(LayerStats {
                 id: layer_id,
                 peak_dbfs: -180.0,
@@ -177,10 +281,6 @@ pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
             energies.push(0.0f64);
             continue;
         }
-        // The layer lands `at` seconds into the song: render full-length, then
-        // shift right and truncate (never shortening the render keeps RNG
-        // consumption — and therefore v1 sibling content — offset-invariant).
-        let off = ((t.at.max(0.0) * sr as f32).round() as usize).min(n);
         // Equal-power pan/gain. With no automation this is constant (the proven
         // fast path, byte-identical); with automation it varies per bus sample.
         // The closure returns the same constant value when unautomated, so the
@@ -198,38 +298,52 @@ pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
                 }
             }
         };
+        // The duck envelope follows the SOURCE track's signal (the source
+        // itself renders untouched); this track's post-fader contribution is
+        // multiplied by it. Unvalidated documents may name a missing source —
+        // then there is no ducking (validate() rejects the document).
+        let duck = t.sidechain.as_ref().and_then(|sc| {
+            let (si, source) = tracks
+                .iter()
+                .enumerate()
+                .find(|(_, s)| s.id.as_deref() == Some(sc.source.as_str()))?;
+            Some(duck_envelope(&rendered[si], source, sc, n, sr))
+        });
         // Contribution stats accumulate over what actually lands on the bus
-        // (post fader/pan/offset, pre master). Per-channel energy keeps them
-        // pan-invariant: gl² + gr² = gain² for any pan.
+        // (post fader/pan/offset/duck, pre master). Per-channel energy keeps
+        // them pan-invariant: gl² + gr² = gain² for any pan.
         let (mut tpeak, mut tsum) = (0.0f32, 0.0f64);
-        if let Some((l, r)) = track_native_stereo(&t.node, n, sr) {
-            // A sampler track keeps its recorded stereo image; pan biases it.
-            for i in 0..n - off {
-                let (gl, gr) = gl_gr(i + off);
-                let (la, ra) = (
-                    l[i] * gl * std::f32::consts::SQRT_2,
-                    r[i] * gr * std::f32::consts::SQRT_2,
-                );
-                left[i + off] += la;
-                right[i + off] += ra;
-                tpeak = tpeak.max(la.abs()).max(ra.abs());
-                tsum += (la * la + ra * ra) as f64;
+        match &rendered[ti] {
+            TrackRender::Muted => unreachable!("muted layers continue above"),
+            TrackRender::Stereo {
+                off,
+                left: l,
+                right: r,
+            } => {
+                // A sampler track keeps its recorded stereo image; pan biases it.
+                for i in 0..n - off {
+                    let (gl, gr) = gl_gr(i + off);
+                    let d = duck.as_ref().map_or(1.0, |v| v[i + off]);
+                    let (la, ra) = (
+                        l[i] * gl * std::f32::consts::SQRT_2 * d,
+                        r[i] * gr * std::f32::consts::SQRT_2 * d,
+                    );
+                    left[i + off] += la;
+                    right[i + off] += ra;
+                    tpeak = tpeak.max(la.abs()).max(ra.abs());
+                    tsum += (la * la + ra * ra) as f64;
+                }
             }
-        } else {
-            let base = track_stream_seed(doc.seed, stream);
-            let mono = if per_track_streams {
-                let mut trng = Rng::new(base);
-                render_node(&t.node, n, sr, &mut trng, engine, base)
-            } else {
-                render_node(&t.node, n, sr, &mut rng, engine, base)
-            };
-            for (i, x) in mono.into_iter().take(n - off).enumerate() {
-                let (gl, gr) = gl_gr(i + off);
-                let (la, ra) = (x * gl, x * gr);
-                left[i + off] += la;
-                right[i + off] += ra;
-                tpeak = tpeak.max(la.abs()).max(ra.abs());
-                tsum += (la * la + ra * ra) as f64;
+            TrackRender::Mono { off, sig } => {
+                for (i, x) in sig.iter().take(n - off).enumerate() {
+                    let (gl, gr) = gl_gr(i + off);
+                    let d = duck.as_ref().map_or(1.0, |v| v[i + off]);
+                    let (la, ra) = (x * gl * d, x * gr * d);
+                    left[i + off] += la;
+                    right[i + off] += ra;
+                    tpeak = tpeak.max(la.abs()).max(ra.abs());
+                    tsum += (la * la + ra * ra) as f64;
+                }
             }
         }
         // RMS over the whole timeline (both channels), so layers compare

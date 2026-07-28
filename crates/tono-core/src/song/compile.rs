@@ -185,6 +185,7 @@ impl Song {
             at: 0.0,
             mute: false,
             automation: Vec::new(),
+            sidechain: None,
         })
     }
 }

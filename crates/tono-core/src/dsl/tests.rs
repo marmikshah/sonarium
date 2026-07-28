@@ -596,3 +596,58 @@ fn wavetable_defaults_and_validates_its_bounds() {
 }
 
 #[test]
+fn validate_rejects_bad_sidechain_wiring() {
+    // Unknown source id.
+    let d = doc(
+        r#"{ "name": "n", "version": 2, "root": { "type": "tracks", "tracks": [
+                { "id": "pad", "node": { "type": "sine", "freq": 220 },
+                  "sidechain": { "source": "kick" } }
+            ] } }"#,
+    );
+    let err = d.validate().unwrap_err();
+    assert!(err.contains("'kick'"), "{err}");
+    assert!(err.contains("not a layer id"), "{err}");
+    // A track cannot duck to its own signal.
+    let d = doc(
+        r#"{ "name": "n", "version": 2, "root": { "type": "tracks", "tracks": [
+                { "id": "kick", "node": { "type": "noise" },
+                  "sidechain": { "source": "kick" } }
+            ] } }"#,
+    );
+    let err = d.validate().unwrap_err();
+    assert!(err.contains("the track itself"), "{err}");
+    // Follower-of-follower chains are rejected (this also rejects 2-cycles:
+    // a→b with b→a fails here for whichever follower is checked first).
+    let d = doc(
+        r#"{ "name": "n", "version": 2, "root": { "type": "tracks", "tracks": [
+                { "id": "kick", "node": { "type": "noise" } },
+                { "id": "bass", "node": { "type": "sine", "freq": 55 },
+                  "sidechain": { "source": "kick" } },
+                { "id": "pad", "node": { "type": "sine", "freq": 220 },
+                  "sidechain": { "source": "bass" } }
+            ] } }"#,
+    );
+    let err = d.validate().unwrap_err();
+    assert!(err.contains("follower-of-follower"), "{err}");
+    // Out-of-range sidechain params.
+    let d = doc(
+        r#"{ "name": "n", "version": 2, "root": { "type": "tracks", "tracks": [
+                { "id": "kick", "node": { "type": "noise" } },
+                { "id": "pad", "node": { "type": "sine", "freq": 220 },
+                  "sidechain": { "source": "kick", "amount": 1.5 } }
+            ] } }"#,
+    );
+    assert!(d.validate().unwrap_err().contains("sidechain.amount"));
+    // A sane link — including several tracks following the same source —
+    // validates.
+    let ok = doc(
+        r#"{ "name": "n", "version": 2, "root": { "type": "tracks", "tracks": [
+                { "id": "pad", "node": { "type": "sine", "freq": 220 },
+                  "sidechain": { "source": "kick" } },
+                { "id": "bass", "node": { "type": "sine", "freq": 55 },
+                  "sidechain": { "source": "kick" } },
+                { "id": "kick", "node": { "type": "noise" } }
+            ] } }"#,
+    );
+    assert_eq!(ok.validate(), Ok(()));
+}

@@ -40,6 +40,45 @@ pub struct Track {
     /// node level (this is the track/song level).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub automation: Vec<AutoLane>,
+    /// Sidechain ducking: this track's level dips whenever the `source`
+    /// track's signal is loud — the classic kick→bass pump, at mixer level.
+    /// The source track renders exactly as it does today; only this (the
+    /// follower) track is gain-reduced. None ⇒ the render is byte-identical
+    /// to a document without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidechain: Option<Sidechain>,
+}
+
+/// A tracks-level sidechain link: the follower's post-fader signal is
+/// multiplied by a gain envelope driven by the `source` track's signal, with
+/// the same attack/release follower the `duck` node uses (so the pump
+/// character matches). A source must be a plain track — follower-of-follower
+/// chains are rejected by validation (duck directly to the source's source).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct Sidechain {
+    /// The id of the track whose signal drives the ducking (e.g. `"kick"`).
+    pub source: String,
+    /// Duck depth, 0..1 (1 = fully silent at the source's peak).
+    #[serde(default = "default_sidechain_amount")]
+    pub amount: f32,
+    /// Gain-reduction attack in seconds.
+    #[serde(default = "default_sidechain_attack")]
+    pub attack: f32,
+    /// Recovery time in seconds (the "pump" length).
+    #[serde(default = "default_sidechain_release")]
+    pub release: f32,
+}
+
+// The defaults mirror the `duck` node's, so moving a pump from inside a node
+// tree to the mixer keeps the same feel.
+fn default_sidechain_amount() -> f32 {
+    0.8
+}
+fn default_sidechain_attack() -> f32 {
+    0.005
+}
+fn default_sidechain_release() -> f32 {
+    0.25
 }
 
 /// What a track automation lane controls.
