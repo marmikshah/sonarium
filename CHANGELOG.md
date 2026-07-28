@@ -10,6 +10,10 @@
   with fast strike partials, and an inharmonic bell partial stack whose highs
   die first. The streaming renderer pre-renders seqs via the exact offline
   synthesis, so all four stream byte-identically by construction.
+- **New `tremolo` node** — per-sample amplitude modulation
+  (`rate` 0..40 Hz, `depth` 0..1) as a closed-form processor. A modulated
+  `gain` renders offline but can't stream; `tremolo` streams natively and
+  byte-identically at any block size.
 - **`StreamGraph::blockers(doc)`** — the streaming renderer's coverage check
   as an actionable report: one `StreamBlocker` per blocking feature
   (`normalize`, `loop` playback, Haas/Wide stereo, a `tracks` root, RNG nodes

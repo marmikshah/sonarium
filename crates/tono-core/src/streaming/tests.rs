@@ -243,6 +243,20 @@ fn duck_with_streamable_trigger() {
     ));
 }
 
+#[test]
+fn tremolo_streams_byte_identically() {
+    // The tremolo gain is a closed form of the absolute sample index, so the
+    // stream matches the offline render at every block size — unlike a
+    // modulated `gain`, which is a StreamBlocker::ModulatedFilter.
+    let d = parse(
+        r#"{ "name":"tr", "duration":0.08, "root": { "type":"chain", "stages": [
+            { "type":"sine", "freq":220 },
+            { "type":"tremolo", "rate":6, "depth":0.8 } ] } }"#,
+    );
+    assert!(StreamGraph::blockers(&d).is_empty());
+    assert_byte_identical(&d);
+}
+
 // ---- randomized byte-identity fuzz over the streamable node set ----
 
 fn rf(rng: &mut Rng, lo: f64, hi: f64) -> f64 {

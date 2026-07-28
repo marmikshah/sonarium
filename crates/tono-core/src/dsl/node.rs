@@ -29,6 +29,10 @@ fn default_mod_mix() -> f32 {
 fn default_chorus_rate() -> f32 {
     1.5
 }
+// Classic amp/tremolo rate.
+fn default_tremolo_rate() -> f32 {
+    6.0
+}
 fn default_flanger_rate() -> f32 {
     0.25
 }
@@ -465,6 +469,19 @@ pub enum Node {
         /// Carrier frequency in Hz.
         freq: Value,
     },
+    /// Tremolo: per-sample amplitude modulation — the gain swings between
+    /// `1 - depth` and 1 at `rate` Hz. Unlike a modulated `gain` (which does
+    /// not stream), the gain is a closed-form function of the absolute sample
+    /// index, so tremolo streams natively and byte-identically to the offline
+    /// render.
+    Tremolo {
+        /// LFO rate in Hz.
+        #[serde(default = "default_tremolo_rate")]
+        rate: f32,
+        /// Modulation depth, 0..1 (0 = transparent passthrough, 1 = full cut).
+        #[serde(default = "default_mod_depth")]
+        depth: f32,
+    },
     /// Flanger: a very short modulated delay with feedback — the classic jet
     /// sweep / metallic whoosh. Stronger and more resonant than chorus.
     Flanger {
@@ -568,6 +585,7 @@ impl Node {
                 | Node::Modal { .. }
                 | Node::Drive { .. }
                 | Node::RingMod { .. }
+                | Node::Tremolo { .. }
                 | Node::Chorus { .. }
                 | Node::Flanger { .. }
                 | Node::Phaser { .. }
@@ -619,6 +637,7 @@ impl Node {
             | Node::Modal { .. }
             | Node::Drive { .. }
             | Node::RingMod { .. }
+            | Node::Tremolo { .. }
             | Node::Chorus { .. }
             | Node::Flanger { .. }
             | Node::Phaser { .. }
@@ -665,6 +684,7 @@ impl Node {
             | Node::Modal { .. }
             | Node::Drive { .. }
             | Node::RingMod { .. }
+            | Node::Tremolo { .. }
             | Node::Chorus { .. }
             | Node::Flanger { .. }
             | Node::Phaser { .. }
