@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`tono review FILE.json [--archetype KIND]`** — the `review` grader
+  (archetype targets + the universal ship checklist) as a CLI subcommand:
+  render, grade, and print every finding worst-first with the measured value,
+  the target, and the fix to try. Exits non-zero on a FAIL grade, so it works
+  as a ship gate in CI. Level metrics measure the stereo pair when there is
+  one, matching `tono render`.
+
 ## 1.9.0 — 2026-07-19
 
 A full-codebase review hardening pass: the input edges that could render NaN,

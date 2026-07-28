@@ -13,7 +13,7 @@
 
 pub use tono_core::{
     adaptive, analysis, catalog, drumkit, dsl, dsp, edit, instrument, patch, player, prelude,
-    presets, render, review, runtime, song, streaming, vary,
+    presets, render, runtime, song, streaming, vary,
 };
 
 pub mod audio;
@@ -22,4 +22,5 @@ pub mod imaging;
 pub mod midi;
 #[cfg(feature = "play")]
 pub mod play;
+pub mod review;
 pub mod target;

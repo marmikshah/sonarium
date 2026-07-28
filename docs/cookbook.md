@@ -109,8 +109,10 @@ wave. Drive a **polish loop**: read the stats → apply the single highest-impac
 fix by editing one field → re-render → if it regressed, revert that edit →
 repeat until the targets are met. Don't chase a deviation the sound's character
 justifies (a bell's long tail, a gusting wind's crest) — stop at the targets,
-not past them. (`tono_core::review` grades a doc against an archetype
-programmatically if you want the checklist automated in Rust.)
+not past them. **`tono review doc.json --archetype laser` runs the whole
+checklist for you** — every finding prints the measured value, the target, and
+the fix to try, and the command exits non-zero on a FAIL grade, so it doubles
+as a ship gate in CI. (The same grading is `tono_core::review` in Rust.)
 
 ## Tips
 - **Punchy/percussive:** `a: 0` (instant attack), short `d`, `s: 0`, add `punch`.
