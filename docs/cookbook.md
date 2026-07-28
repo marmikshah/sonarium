@@ -194,6 +194,10 @@ console tracks:
 | `epiano` | Rhodes e-piano | soft FM body + metal tine ping; velocity opens the tine. Parameter-free. |
 | `organ` | tonewheel organ | drawbar harmonics + attack percussion; sustains while held (`env {s:1}`). |
 | `strings` | string ensemble | 3 detuned saws, slow bow swell (~150 ms — write notes slightly early), mellowing lowpass. |
+| `brass` | brass section | 2 detuned saws, lowpass swells open over ~70 ms (the blat); velocity opens it further. Parameter-free. |
+| `flute` | concert flute | sine + vibrato that fades in (~150 ms), breathy lowpassed noise; velocity adds breath. Parameter-free. |
+| `mallet` | marimba | sine fundamental + wooden strike partials dying in tens of ms; velocity brightens. Parameter-free. |
+| `bell` | struck bell | inharmonic partials (highs die first, hum rings on) + detuned shimmer twin. Parameter-free. |
 | `bass` | fingered bass | filtered saw + sine sub; velocity snaps the filter open. |
 | `kit` | drum kit | General MIDI map: pitch picks the drum (see below). |
 | `sampler` | **real recorded instruments** | plays any SoundFont: `sf2` path + `sf2_preset` (GM program: 0 grand piano, 32 acoustic bass, 48 strings…); `sf2_bank: 128` = GM drum map. The realism instrument. |

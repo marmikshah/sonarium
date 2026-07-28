@@ -497,6 +497,28 @@ pub enum SeqWave {
     /// bow swell and a mellowing lowpass — pads, sustained chords, swells.
     /// Notes bloom ~150 ms after the attack; write them slightly early.
     Strings,
+    /// Brass section: two detuned band-limited saws through a lowpass whose
+    /// cutoff swells open over the first ~70 ms — the "blat" of a horn
+    /// attack. Velocity (`gain`) opens the filter further: dig in for a
+    /// bright stab, play soft for a mellow swell. Sustains while held —
+    /// pair with env `{s:1}` and let `len` phrase.
+    Brass,
+    /// Concert flute: a sine with a vibrato (~5.5 Hz) that fades in over
+    /// the first ~150 ms, over a breath of lowpassed air noise. Velocity
+    /// (`gain`) adds breath and edge. Sustains while held — write long
+    /// notes and let `len` shape the phrase.
+    Flute,
+    /// Marimba-like mallet: a warm sine fundamental with two wooden strike
+    /// partials that die in tens of milliseconds — the "thok" of a mallet
+    /// hit. Velocity (`gain`) brightens the strike. Woodier and
+    /// shorter-lived than `epiano`; use a short env and space the notes.
+    Mallet,
+    /// Struck bell: inharmonic partials (1, 2.02, 2.74, 4.07, 5.43) with
+    /// per-partial decays — the highs die first, the hum rings on — plus a
+    /// slightly detuned twin of the fundamental whose slow beating is the
+    /// shimmer. Velocity (`gain`) scales the hit. Long natural ring: give
+    /// the notes room.
+    Bell,
     /// Fingered bass: a filtered saw whose cutoff snaps open with velocity
     /// and settles, over a solid sine sub. Punchy, dark, sits under a mix.
     Bass,

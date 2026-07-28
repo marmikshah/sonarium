@@ -937,6 +937,44 @@ fn bass_is_darker_than_a_raw_saw() {
 }
 
 #[test]
+fn new_melodic_waves_are_audible_finite_and_deterministic() {
+    for wave in ["brass", "flute", "mallet", "bell"] {
+        let a = one_note(wave, "A3", 0.5);
+        let b = one_note(wave, "A3", 0.5);
+        assert!(rms(&a) > 0.02, "{wave} audible, rms {}", rms(&a));
+        assert!(a.iter().all(|x| x.is_finite()), "{wave}: no NaN/inf");
+        assert_eq!(a, b, "{wave} must be deterministic");
+    }
+}
+
+#[test]
+fn brass_filter_swells_open() {
+    let s = one_note("brass", "C3", 0.8);
+    let win = |a: f32, b: f32| brightness(&s[(a * 44_100.0) as usize..(b * 44_100.0) as usize]);
+    // The blat: the tone is measurably brighter once the cutoff has opened
+    // (compare just after the attack to the fully-open steady state, before
+    // the detune beating confounds the proxy).
+    assert!(
+        win(0.15, 0.2) > win(0.01, 0.03) * 1.2,
+        "brass brightens as the filter opens"
+    );
+}
+
+#[test]
+fn mallet_strike_dies_into_the_fundamental() {
+    let s = one_note("mallet", "A3", 0.5);
+    let q = s.len() / 4;
+    assert!(brightness(&s[..q]) > brightness(&s[3 * q..]) * 1.3);
+}
+
+#[test]
+fn bell_highs_die_before_the_hum() {
+    let s = one_note("bell", "A3", 1.0);
+    let q = s.len() / 4;
+    assert!(brightness(&s[..q]) > brightness(&s[3 * q..]) * 1.3);
+}
+
+#[test]
 fn tracks_pan_places_instruments_on_the_stage() {
     let d = doc(
         r#"{ "name": "n", "duration": 0.2, "root": { "type": "tracks", "tracks": [
