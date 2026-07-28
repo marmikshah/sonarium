@@ -511,3 +511,111 @@ fn glide_pitch_nan_coeff_snaps_instead_of_poisoning() {
     assert!(out.iter().all(|x| x.is_finite()));
     assert_eq!(g.pitch(), 2.0, "NaN coeff folds to an instant snap");
 }
+
+#[test]
+fn blockers_names_every_reason_with_a_fix() {
+    let cases: &[(&str, StreamBlocker)] = &[
+        (
+            r#"{ "name":"n", "duration":0.1, "normalize": { "target_lufs": -14 },
+                "root": { "type":"sine", "freq":440 } }"#,
+            StreamBlocker::Normalize,
+        ),
+        (
+            r#"{ "name":"l", "duration":0.5,
+                "playback": { "mode":"loop", "start_secs":0.1, "crossfade_secs":0.05 },
+                "root": { "type":"sine", "freq":220 } }"#,
+            StreamBlocker::LoopPlayback,
+        ),
+        (
+            r#"{ "name":"s", "duration":0.1, "stereo": { "mode":"haas", "ms":12 },
+                "root": { "type":"sine", "freq":220 } }"#,
+            StreamBlocker::StereoTreatment,
+        ),
+        (
+            r#"{ "name":"t", "duration":0.1, "bpm":120, "root": { "type":"tracks", "tracks": [
+                { "node": { "type":"sine", "freq":440 } } ] } }"#,
+            StreamBlocker::TracksRoot,
+        ),
+        (
+            r#"{ "name":"r", "duration":0.1, "engine":1,
+                "root": { "type":"noise", "color":"white" } }"#,
+            StreamBlocker::LegacyRng { engine: 1 },
+        ),
+        (
+            r#"{ "name":"sf", "duration":0.1, "engine":2, "root": { "type":"seq",
+                "wave":"sampler", "sf2":"x.sf2", "bpm":100, "steps":4,
+                "env": { "a":0.001, "s":1.0, "r":0.1 },
+                "notes": [ { "step":0, "len":4, "pitch":"C4" } ] } }"#,
+            StreamBlocker::Sampler,
+        ),
+        (
+            r#"{ "name":"m", "duration":0.1, "root": { "type":"chain", "stages": [
+                { "type":"sawtooth", "freq":110 },
+                { "type":"lowpass", "cutoff": { "lfo": { "rate":2, "depth":400, "center":800 } } } ] } }"#,
+            StreamBlocker::ModulatedFilter,
+        ),
+    ];
+    for (json, want) in cases {
+        let doc = parse(json);
+        let got = StreamGraph::blockers(&doc);
+        assert!(got.contains(want), "{json}: got {got:?}");
+        assert!(StreamGraph::try_from_doc(&doc).is_none(), "{json}");
+        // Every blocker message carries the fix, not just the fault.
+        assert!(want.to_string().contains('—'), "{want}");
+    }
+}
+
+#[test]
+fn blockers_agrees_with_try_from_doc() {
+    // The report and the silent Option must never disagree: streamable docs
+    // report no blockers, blocked docs report at least one.
+    let streamable = [
+        r#"{ "name":"a", "duration":0.1, "root": { "type":"sine", "freq":440 } }"#,
+        r#"{ "name":"b", "duration":0.1, "engine":2, "seed":3, "root": { "type":"chain", "stages": [
+            { "type":"noise", "color":"pink" },
+            { "type":"lowpass", "cutoff":1200, "q":0.8 },
+            { "type":"reverb", "room":0.4, "mix":0.3 } ] } }"#,
+        r#"{ "name":"c", "duration":0.1, "root": { "type":"mul", "inputs": [
+            { "type":"fm", "freq":440, "ratio":2.0, "index": { "slide": { "from":4, "to":1, "secs":0.08 } } },
+            { "type":"env", "a":0.001, "d":0.09, "s":0.0, "r":0.03 } ] } }"#,
+    ];
+    for json in streamable {
+        let doc = parse(json);
+        doc.validate().unwrap();
+        assert_eq!(StreamGraph::blockers(&doc), Vec::new(), "{json}");
+        assert!(StreamGraph::try_from_doc(&doc).is_some(), "{json}");
+    }
+    let blocked = [
+        r#"{ "name":"d", "duration":0.1, "bpm":120, "root": { "type":"tracks", "tracks": [
+            { "node": { "type":"sine", "freq":440 } } ] } }"#,
+        r#"{ "name":"e", "duration":0.1, "engine":1,
+            "root": { "type":"dust", "density":40, "decay":0.02 } }"#,
+    ];
+    for json in blocked {
+        let doc = parse(json);
+        assert!(!StreamGraph::blockers(&doc).is_empty(), "{json}");
+        assert!(StreamGraph::try_from_doc(&doc).is_none(), "{json}");
+    }
+}
+
+#[test]
+fn multiple_blockers_all_report_once() {
+    // A doc tripping several rules reports each once, doc-level first.
+    let doc = parse(
+        r#"{ "name":"x", "duration":0.1, "engine":1,
+            "normalize": { "target_lufs": -14 },
+            "stereo": { "mode":"wide" },
+            "root": { "type":"mix", "inputs": [
+                { "type":"noise", "color":"white" },
+                { "type":"dust", "density":30, "decay":0.02 } ] } }"#,
+    );
+    let got = StreamGraph::blockers(&doc);
+    assert_eq!(
+        got,
+        vec![
+            StreamBlocker::Normalize,
+            StreamBlocker::StereoTreatment,
+            StreamBlocker::LegacyRng { engine: 1 },
+        ]
+    );
+}

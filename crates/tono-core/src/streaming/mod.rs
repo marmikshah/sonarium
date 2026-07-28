@@ -28,7 +28,8 @@
 //! runtime's instance-per-layer model covers layering); a **`normalize`**
 //! output stage (a whole-buffer op); **`loop` playback** (the crossfaded loop
 //! body is a whole-buffer transform); and a **stereo** (Haas/Wide) treatment
-//! (applied at write time, not in the graph).
+//! (applied at write time, not in the graph). [`StreamGraph::blockers`] reports
+//! exactly which of these a document trips, with the fix for each.
 
 mod proc;
 mod source;
@@ -37,10 +38,74 @@ pub(crate) mod value;
 #[cfg(test)]
 mod tests;
 
-use crate::dsl::{Node, Playback, SoundDoc, Stereo};
+use std::fmt;
+
+use crate::dsl::{Node, Playback, SeqWave, SoundDoc, Stereo, Value};
 use crate::dsp::node_path;
 use proc::{Proc, try_proc};
 use source::{Src, try_src};
+
+/// Why a document can't stream — one entry per blocking feature, so an author
+/// (or an agent) gets the reason and the fix instead of a silent fallback.
+/// The `Display` text is the actionable message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamBlocker {
+    /// A `normalize` output stage is a whole-buffer op.
+    Normalize,
+    /// `loop` playback renders as its crossfaded loop body — a whole-buffer
+    /// transform.
+    LoopPlayback,
+    /// A Haas/Wide stereo treatment is applied at write time, not in the graph.
+    StereoTreatment,
+    /// A `tracks` root mixes layers on the stereo bus.
+    TracksRoot,
+    /// `noise` / `dust` / `seq` draw from the old shared, order-dependent RNG
+    /// stream under this engine revision.
+    LegacyRng {
+        /// The document's effective engine revision.
+        engine: u32,
+    },
+    /// The SoundFont sampler seq is an external stateful voice.
+    Sampler,
+    /// A filter / EQ / gain carries a modulated cutoff or amount — the
+    /// streaming biquads hold constant coefficients.
+    ModulatedFilter,
+}
+
+impl fmt::Display for StreamBlocker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StreamBlocker::Normalize => write!(
+                f,
+                "the normalize output stage is a whole-buffer op — bake the level into the graph (a gain node) instead"
+            ),
+            StreamBlocker::LoopPlayback => write!(
+                f,
+                "loop playback renders as its crossfaded loop body — stream the one-shot and loop at the host (Player), or bounce the loop offline"
+            ),
+            StreamBlocker::StereoTreatment => write!(
+                f,
+                "a Haas/Wide stereo treatment is applied at write time, not in the graph — stream mono and widen at the host"
+            ),
+            StreamBlocker::TracksRoot => write!(
+                f,
+                "a tracks root mixes layers on the stereo bus — stream one source per layer (the runtime's instance-per-layer model) instead"
+            ),
+            StreamBlocker::LegacyRng { engine } => write!(
+                f,
+                "noise/dust/seq draw from the shared order-dependent RNG stream under engine {engine} — set \"engine\": 2 or later for structurally-seeded RNG"
+            ),
+            StreamBlocker::Sampler => write!(
+                f,
+                "the SoundFont sampler seq is an external stateful voice — bounce the part offline, or voice it with the built-in waves"
+            ),
+            StreamBlocker::ModulatedFilter => write!(
+                f,
+                "a filter/EQ/gain carries a modulated cutoff or amount — bake it constant, or sweep it live with set_cutoff"
+            ),
+        }
+    }
+}
 
 /// A stateful, block-by-block renderer for a supported graph.
 pub struct StreamGraph {
@@ -60,19 +125,86 @@ pub struct StreamGraph {
 }
 
 impl StreamGraph {
+    /// Why `doc` can't stream — one entry per blocking feature (doc-level
+    /// first, then nodes in walk order), empty when [`try_from_doc`](Self::try_from_doc)
+    /// would succeed. The actionable companion to the silent `Option`: the
+    /// Engine/StreamSource fallback path stays allocation-free, and authors
+    /// get the reason and the fix.
+    pub fn blockers(doc: &SoundDoc) -> Vec<StreamBlocker> {
+        let mut out = Vec::new();
+        if doc.normalize.is_some() {
+            out.push(StreamBlocker::Normalize);
+        }
+        if matches!(doc.playback, Playback::Loop { .. }) {
+            out.push(StreamBlocker::LoopPlayback);
+        }
+        if !matches!(doc.stereo, Stereo::Mono) {
+            out.push(StreamBlocker::StereoTreatment);
+        }
+        if matches!(doc.root, Node::Tracks { .. }) {
+            out.push(StreamBlocker::TracksRoot);
+        }
+        let engine = doc.effective_engine();
+        doc.root.walk(&mut |node| match node {
+            Node::Noise { .. } | Node::Dust { .. } if engine < 2 => {
+                out.push(StreamBlocker::LegacyRng { engine });
+            }
+            Node::Seq { wave, .. } => {
+                if engine < 2 {
+                    out.push(StreamBlocker::LegacyRng { engine });
+                }
+                if *wave == SeqWave::Sampler {
+                    out.push(StreamBlocker::Sampler);
+                }
+            }
+            // Filters/EQ/gain only stream with a constant cutoff/amount (the
+            // streaming biquads hold constant coefficients).
+            Node::Gain {
+                amount: Value::Modulated(_),
+            } => {
+                out.push(StreamBlocker::ModulatedFilter);
+            }
+            Node::Lowpass {
+                cutoff: Value::Modulated(_),
+                ..
+            }
+            | Node::Highpass {
+                cutoff: Value::Modulated(_),
+                ..
+            }
+            | Node::Bandpass {
+                cutoff: Value::Modulated(_),
+                ..
+            }
+            | Node::Notch {
+                cutoff: Value::Modulated(_),
+                ..
+            }
+            | Node::Peak {
+                cutoff: Value::Modulated(_),
+                ..
+            }
+            | Node::Lowshelf {
+                cutoff: Value::Modulated(_),
+                ..
+            }
+            | Node::Highshelf {
+                cutoff: Value::Modulated(_),
+                ..
+            } => {
+                out.push(StreamBlocker::ModulatedFilter);
+            }
+            _ => {}
+        });
+        out.dedup();
+        out
+    }
+
     /// Build a streamer for `doc`, or `None` if the graph is outside the
     /// streamable subset — the caller then falls back to the buffer-backed
-    /// [`crate::player::Player`].
+    /// [`crate::player::Player`]. [`blockers`](Self::blockers) says why.
     pub fn try_from_doc(doc: &SoundDoc) -> Option<Self> {
-        // Loop docs render offline as their crossfaded loop body and stereo
-        // (Haas/Wide) docs are stereoized at write time — neither transform
-        // exists on the streaming path, so accepting them would play the raw
-        // graph: un-looped, un-widened, and not byte-identical to the bounce.
-        if doc.normalize.is_some()
-            || matches!(doc.playback, Playback::Loop { .. })
-            || !matches!(doc.stereo, Stereo::Mono)
-            || matches!(doc.root, Node::Tracks { .. })
-        {
+        if !Self::blockers(doc).is_empty() {
             return None;
         }
         // The duration clamp mirrors the offline render paths so an
