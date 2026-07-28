@@ -22,6 +22,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
+
+[[bench]]
+name = "render"
+harness = false
+
 [features]
 default = ["analysis", "sampler"]
 # Spectral analysis + spectrogram/waveform PNGs (the authoring/critique surface).

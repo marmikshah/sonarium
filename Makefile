@@ -6,7 +6,7 @@ BIN     := target/release/tono
 RELEASE_BRANCH ?= master
 
 .DEFAULT_GOAL := help
-.PHONY: help run build build-release install desktop play python wheel python-test python-smoke test fmt lint check pre-commit-checks verify verify-native site version release hooks clean
+.PHONY: help run build build-release install desktop play python wheel python-test python-smoke test bench fmt lint check pre-commit-checks verify verify-native site version release hooks clean
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -50,6 +50,9 @@ python-smoke: ## Build the extension as a wheel, install it, run the smoke test 
 
 test: ## Run the test suite
 	cargo test
+
+bench: ## Criterion benchmarks for the tono-core render hot path (report-only; NOT part of 'make verify')
+	cargo bench -p tono-core
 
 fmt: ## Format all sources
 	cargo fmt --all
