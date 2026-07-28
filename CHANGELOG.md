@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Added
+- **Tracks-level sidechain ducking** — a track can carry
+  `sidechain: { source, amount, attack, release }` and duck following another
+  track's positioned, post-fader signal (the kick→pad pump at the mixer
+  level, byte-for-byte the `duck` node's envelope math). Validation rejects
+  unknown sources, self-follows, and follower-of-follower chains; a muted
+  source ducks nothing; `amount: 0` and absent fields render bit-identically
+  to before. Deterministic regardless of declaration order.
 - **New `wavetable` node** — a morphing wavetable oscillator with four
   built-in deterministically generated table sets (`basic`, `harmonics`,
   `formant`, `metallic`): a modulatable `position` morphs across each set.

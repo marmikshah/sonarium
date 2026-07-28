@@ -12,7 +12,7 @@ mod tracks;
 mod validate;
 
 pub use node::{BassKnobs, Children, ChildrenMut, FmKnobs, Node, PianoKnobs, PluckKnobs, Sf2Knobs};
-pub use tracks::{AutoLane, AutoPoint, AutoTarget, Track};
+pub use tracks::{AutoLane, AutoPoint, AutoTarget, Sidechain, Track};
 pub use validate::ValidateError;
 
 use schemars::JsonSchema;

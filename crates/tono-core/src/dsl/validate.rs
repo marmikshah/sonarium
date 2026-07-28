@@ -253,6 +253,58 @@ impl SoundDoc {
                 }
                 validate_node(&t.node)?;
             }
+            // Sidechain wiring is a cross-track check, so it runs once every
+            // id is known (a source may be declared after its follower).
+            for (i, t) in tracks.iter().enumerate() {
+                let Some(sc) = &t.sidechain else { continue };
+                let who = match &t.id {
+                    Some(id) => format!("layer '{id}'"),
+                    None => format!("tracks[{i}]"),
+                };
+                if !(0.0..=1.0).contains(&sc.amount) {
+                    return Err(format!(
+                        "{who}: sidechain.amount must be in [0, 1], got {}",
+                        sc.amount
+                    ));
+                }
+                if !sc.attack.is_finite() || sc.attack < 0.0 {
+                    return Err(format!(
+                        "{who}: sidechain.attack must be >= 0 seconds, got {}",
+                        sc.attack
+                    ));
+                }
+                if !sc.release.is_finite() || sc.release < 0.0 {
+                    return Err(format!(
+                        "{who}: sidechain.release must be >= 0 seconds, got {}",
+                        sc.release
+                    ));
+                }
+                if t.id.as_deref() == Some(sc.source.as_str()) {
+                    return Err(format!(
+                        "{who}: sidechain source '{}' is the track itself — a track cannot \
+                         duck to its own signal",
+                        sc.source
+                    ));
+                }
+                let Some(source) = tracks
+                    .iter()
+                    .find(|s| s.id.as_deref() == Some(sc.source.as_str()))
+                else {
+                    return Err(format!(
+                        "{who}: sidechain source '{}' is not a layer id in this document — \
+                         point it at the track whose signal should drive the duck",
+                        sc.source
+                    ));
+                };
+                if source.sidechain.is_some() {
+                    return Err(format!(
+                        "{who}: sidechain source '{}' is itself a follower — \
+                         follower-of-follower chains are not supported; duck directly to \
+                         the source's source",
+                        sc.source
+                    ));
+                }
+            }
             for (i, m) in master.iter().enumerate() {
                 if !m.is_processor() {
                     return Err(format!(
