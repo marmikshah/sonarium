@@ -443,6 +443,21 @@ fn guitar_variant_streams_byte_identically() {
 }
 
 #[test]
+fn new_melodic_waves_stream_byte_identically() {
+    // Each fixed-model voice (RNG only for the flute's breath — one draw per
+    // sample, in order) pre-renders and streams bit-for-bit.
+    for wave in ["brass", "flute", "mallet", "bell"] {
+        assert_byte_identical(&parse(&format!(
+            r#"{{ "name":"w", "duration":0.2, "seed":5, "engine":2, "root": {{ "type":"seq",
+                "bpm":120, "steps_per_beat":4, "wave":"{wave}",
+                "env": {{ "a":0.005, "d":0.05, "s":0.6, "r":0.05 }},
+                "notes": [ {{ "step":0, "len":2, "pitch":"C4" }},
+                           {{ "step":2, "len":2, "pitch":"G4", "gain":0.6 }} ] }} }}"#
+        )));
+    }
+}
+
+#[test]
 fn engine1_noise_falls_back_but_engine2_streams() {
     // engine < 2 keeps the shared stream ⇒ not streamable (buffer fallback).
     assert!(

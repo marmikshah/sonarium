@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Added
+- **New seq voices: `brass`, `flute`, `mallet`, `bell`** — param-free fixed
+  models in the style of `organ`/`strings`/`epiano`: a detuned saw pair
+  through an opening lowpass (the horn blat; velocity brightens), a sine with
+  fade-in vibrato over lowpassed breath noise, a marimba-like fundamental
+  with fast strike partials, and an inharmonic bell partial stack whose highs
+  die first. The streaming renderer pre-renders seqs via the exact offline
+  synthesis, so all four stream byte-identically by construction.
 - **`StreamGraph::blockers(doc)`** — the streaming renderer's coverage check
   as an actionable report: one `StreamBlocker` per blocking feature
   (`normalize`, `loop` playback, Haas/Wide stereo, a `tracks` root, RNG nodes

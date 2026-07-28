@@ -281,6 +281,10 @@ fn seq_note_signal(
         SeqWave::Epiano => out = epiano_note(note, f, sr),
         SeqWave::Organ => out = organ_note(f, sr),
         SeqWave::Strings => out = strings_note(f, sr),
+        SeqWave::Brass => out = brass_note(note, f, sr),
+        SeqWave::Flute => out = flute_note(note, f, sr, rng),
+        SeqWave::Mallet => out = mallet_note(note, f, sr),
+        SeqWave::Bell => out = bell_note(f, sr),
         SeqWave::Bass => out = bass_note(voice, note, f, sr),
         SeqWave::Kit => out = kit_drum(f, sr, rng, voice.kit),
         // Handled wholesale in sampler_seq (shared synthesizer, polyphony).
@@ -558,6 +562,123 @@ fn strings_note(f: &[f32], sr: u32) -> Signal {
         lp += lp_a * (s / 3.0 - lp);
         let swell = 1.0 - (-t / 0.12).exp();
         out.push(lp * swell);
+    }
+    out
+}
+
+/// Brass: two band-limited saws detuned ±0.4% through a one-pole lowpass
+/// whose cutoff swells from ~800 Hz toward ~2.2 kHz over the first ~70 ms —
+/// the lip-reed "blat" of a horn attack. Velocity opens the filter further.
+fn brass_note(note: &SeqNote, f: &[f32], sr: u32) -> Signal {
+    let srf = sr as f32;
+    let n = f.len();
+    let mut out = Vec::with_capacity(n);
+    let detunes = [0.996f32, 1.004];
+    let mut phases = [0.0f32, 0.5]; // phase-spread so the onset isn't a click
+    let mut lp = 0.0f32;
+    for (i, &fi) in f.iter().enumerate() {
+        let t = i as f32 / srf;
+        let mut s = 0.0;
+        for (p, det) in phases.iter_mut().zip(detunes) {
+            let dt = fi.max(0.0) * det / srf;
+            s += (2.0 * *p - 1.0) - poly_blep(*p, dt);
+            *p += dt;
+            *p -= p.floor();
+        }
+        // The blat: cutoff opens over ~70 ms; velocity pushes it brighter.
+        let cutoff = 800.0 + (1_400.0 + 1_200.0 * note.gain) * (1.0 - (-t / 0.07).exp());
+        let a = 1.0 - (-TAU * cutoff.min(0.45 * srf) / srf).exp();
+        lp += a * (s * 0.5 - lp);
+        out.push(lp);
+    }
+    out
+}
+
+/// Concert flute: a sine with a ~5.5 Hz vibrato that fades in over ~150 ms
+/// (a player settling into the note), over breath — white noise through a
+/// gentle one-pole lowpass, louder with velocity. One RNG draw per sample,
+/// in sample order, so chunking can't change the output.
+fn flute_note(note: &SeqNote, f: &[f32], sr: u32, rng: &mut Rng) -> Signal {
+    let srf = sr as f32;
+    let n = f.len();
+    let mut out = Vec::with_capacity(n);
+    let lp_a = 1.0 - (-TAU * 1_200.0 / srf).exp();
+    let (mut phase, mut vib, mut lp) = (0.0f32, 0.0f32, 0.0f32);
+    for (i, &fi) in f.iter().enumerate() {
+        let t = i as f32 / srf;
+        // Vibrato swells in after the attack, to ±0.6% of pitch.
+        let depth = 0.006 * (1.0 - (-t / 0.15).exp());
+        let fmod = 1.0 + depth * (TAU * vib).sin();
+        vib += 5.5 / srf;
+        vib -= vib.floor();
+        phase += fi.max(0.0) * fmod / srf;
+        phase -= phase.floor();
+        // Breath: one draw per sample, lowpassed to an airy hiss.
+        lp += lp_a * (rng.bi() - lp);
+        out.push(0.9 * (TAU * phase).sin() + (0.02 + 0.03 * note.gain) * lp);
+    }
+    out
+}
+
+/// Marimba-like mallet: a sine fundamental with two fast-decaying strike
+/// partials (ratios ~3.9 and ~9.2 — the wooden bar modes) that die in tens
+/// of milliseconds. Velocity brightens the strike. Woodier and
+/// shorter-lived than the e-piano.
+fn mallet_note(note: &SeqNote, f: &[f32], sr: u32) -> Signal {
+    let srf = sr as f32;
+    let n = f.len();
+    let mut out = Vec::with_capacity(n);
+    let bright = 0.4 + 0.6 * note.gain;
+    let mut ph = [0.0f32; 3];
+    for (i, &fi) in f.iter().enumerate() {
+        let dt = fi.max(0.0) / srf;
+        let t = i as f32 / srf;
+        let s = (TAU * ph[0]).sin()
+            + bright * 0.5 * (-t / 0.03).exp() * (TAU * ph[1]).sin()
+            + bright * 0.25 * (-t / 0.01).exp() * (TAU * ph[2]).sin();
+        out.push(0.7 * s);
+        ph[0] += dt;
+        ph[1] += dt * 3.9;
+        ph[2] += dt * 9.2;
+        for p in ph.iter_mut() {
+            *p -= p.floor();
+        }
+    }
+    out
+}
+
+/// Struck bell: additive inharmonic partials (1, 2.02, 2.74, 4.07, 5.43 —
+/// the hum/prime/tierce stack of a real bell), each with its own decay so
+/// the highs die first and the hum rings on, plus a 0.1% detuned twin of
+/// the fundamental whose slow beating is the shimmer.
+fn bell_note(f: &[f32], sr: u32) -> Signal {
+    let srf = sr as f32;
+    let n = f.len();
+    let mut out = Vec::with_capacity(n);
+    // (ratio, gain, decay secs).
+    const PARTIALS: [(f32, f32, f32); 5] = [
+        (1.0, 1.0, 3.0),
+        (2.02, 0.6, 1.5),
+        (2.74, 0.4, 0.8),
+        (4.07, 0.3, 0.4),
+        (5.43, 0.2, 0.25),
+    ];
+    let mut phases = [0.0f32; 6]; // 5 partials + the detuned twin
+    let norm = 1.0 / (1.0 + PARTIALS.iter().map(|(_, g, _)| g).sum::<f32>());
+    for (i, &fi) in f.iter().enumerate() {
+        let dt = fi.max(0.0) / srf;
+        let t = i as f32 / srf;
+        let mut s = 0.0;
+        for (j, &(ratio, g, decay)) in PARTIALS.iter().enumerate() {
+            s += g * (-t / decay.max(1e-3)).exp() * (TAU * phases[j]).sin();
+            phases[j] += dt * ratio;
+            phases[j] -= phases[j].floor();
+        }
+        // 0.1% detuned twin of the fundamental: the slow-beat shimmer.
+        s += (-t / 3.0).exp() * (TAU * phases[5]).sin();
+        phases[5] += dt * 1.001;
+        phases[5] -= phases[5].floor();
+        out.push(s * norm);
     }
     out
 }
