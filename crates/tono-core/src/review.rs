@@ -30,6 +30,10 @@ pub enum Archetype {
     Impact,
     /// UI click / confirm: tiny, bright, instant.
     Ui,
+    /// Footstep: a very short, low-mid thud/tap.
+    Footstep,
+    /// Power-up / level-up: a short bright rising flourish.
+    Powerup,
     /// Ambience / bed: sustained, dark, low crest, looping.
     Ambience,
     /// BGM / band: a mixed musical loop.
@@ -138,6 +142,20 @@ impl Archetype {
                 attack_max_ms: Some(5.0),
                 centroid_hz: r(2000.0, 8000.0),
                 crest_db: r(12.0, 99.0),
+                one_shot: true,
+            },
+            Archetype::Footstep => Targets {
+                duration_s: r(0.05, 0.15),
+                attack_max_ms: Some(5.0),
+                centroid_hz: r(150.0, 1200.0),
+                crest_db: r(8.0, 16.0),
+                one_shot: true,
+            },
+            Archetype::Powerup => Targets {
+                duration_s: r(0.3, 1.0),
+                attack_max_ms: Some(20.0),
+                centroid_hz: r(1500.0, 6000.0),
+                crest_db: r(6.0, 14.0),
                 one_shot: true,
             },
             Archetype::Ambience => Targets {
@@ -467,6 +485,28 @@ mod tests {
             r.findings.iter().any(|x| x.criterion == "loop seam"),
             "a loop must be graded on its seam"
         );
+    }
+
+    #[test]
+    fn a_thud_passes_footstep_but_fails_laser() {
+        // A short low-mid noise burst: footstep-shaped, not laser-shaped.
+        let d = doc(
+            r#"{ "name": "step", "duration": 0.1, "root": { "type": "chain", "stages": [
+                { "type": "noise", "color": "brown" },
+                { "type": "lowpass", "cutoff": 500, "q": 0.7 },
+                { "type": "mul", "inputs": [
+                    { "type": "env", "a": 0.0, "d": 0.06, "s": 0.0, "r": 0.02, "punch": 0.5 } ] } ] } }"#,
+        );
+        let a = analyze_doc(&d);
+        let step = review(&d, &a, Some(Archetype::Footstep), None);
+        assert_ne!(step.grade, Status::Fail, "footstep: {}", step.summary);
+        let laser = review(&d, &a, Some(Archetype::Laser), None);
+        let centroid = laser
+            .findings
+            .iter()
+            .find(|x| x.criterion == "centroid")
+            .unwrap();
+        assert_eq!(centroid.status, Status::Fail, "too dark for a laser");
     }
 
     #[test]

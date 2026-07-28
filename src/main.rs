@@ -53,10 +53,11 @@ USAGE:
         improvement, then writes the best doc (default <doc>.fit.json)
         and prints its final match report.
 
-    tono review FILE.json [--archetype laser|coin|jump|impact|ui|ambience|bgm]
+    tono review FILE.json [--archetype KIND]
         Grade a SoundDoc against the ship checklist (and an archetype's
-        targets): every finding names the measured value, the target, and
-        the fix to try. Exits non-zero on a FAIL grade.
+        targets: laser, coin, jump, impact, ui, footstep, powerup,
+        ambience, bgm): every finding names the measured value, the
+        target, and the fix to try. Exits non-zero on a FAIL grade.
 
     tono play FILE.json [--secs N]
         Audition a SoundDoc through the speakers (needs the `play`
@@ -550,7 +551,7 @@ fn fit_cmd(args: &[String]) -> anyhow::Result<()> {
 
 /// `tono review` — grade a doc against the ship checklist (and an archetype).
 fn review_cmd(args: &[String]) -> anyhow::Result<()> {
-    let usage = "tono review FILE.json [--archetype laser|coin|jump|impact|ui|ambience|bgm]";
+    let usage = "tono review FILE.json [--archetype laser|coin|jump|impact|ui|footstep|powerup|ambience|bgm]";
     let cli = Cli::parse(args, &["--archetype"], &[])?;
     let file = cli.input(usage)?;
     let archetype = cli
