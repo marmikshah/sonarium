@@ -47,6 +47,11 @@ USAGE:
         Score a SoundDoc against a reference WAV — how close it is and
         where it misses (brightness, loudness, envelope, duration).
 
+    tono review FILE.json [--archetype laser|coin|jump|impact|ui|ambience|bgm]
+        Grade a SoundDoc against the ship checklist (and an archetype's
+        targets): every finding names the measured value, the target, and
+        the fix to try. Exits non-zero on a FAIL grade.
+
     tono play FILE.json [--secs N]
         Audition a SoundDoc through the speakers (needs the `play`
         feature: cargo install tono --features play).
@@ -66,6 +71,7 @@ fn main() -> anyhow::Result<()> {
         Some("import") => import_cmd(&args[2..]),
         Some("diff") => diff_cmd(&args[2..]),
         Some("match") => match_cmd(&args[2..]),
+        Some("review") => review_cmd(&args[2..]),
         Some("play") => play_cmd(&args[2..]),
         Some("--version") | Some("-V") => {
             println!("tono {}", env!("CARGO_PKG_VERSION"));
@@ -451,6 +457,25 @@ fn match_cmd(args: &[String]) -> anyhow::Result<()> {
         "{}",
         tono::target::match_report(Path::new(reference), &doc)?
     );
+    Ok(())
+}
+
+/// `tono review` — grade a doc against the ship checklist (and an archetype).
+fn review_cmd(args: &[String]) -> anyhow::Result<()> {
+    let usage = "tono review FILE.json [--archetype laser|coin|jump|impact|ui|ambience|bgm]";
+    let cli = Cli::parse(args, &["--archetype"], &[])?;
+    let file = cli.input(usage)?;
+    let archetype = cli
+        .flag(&["--archetype"])
+        .map(tono::review::parse_archetype)
+        .transpose()?;
+    let doc = load_doc(file)?;
+    let (review, report) = tono::review::review_doc(&doc, archetype);
+    print!("{report}");
+    // A FAIL grade is a ship-blocker — say so with the exit code.
+    if review.grade == tono::review::Status::Fail {
+        anyhow::bail!("{} FAIL finding(s) — fix before shipping", review.fail);
+    }
     Ok(())
 }
 
