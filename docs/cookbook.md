@@ -99,6 +99,8 @@ on attack, spectral centroid, crest, and duration:
 | `jump` | short rising sweep, fast gate |
 | `impact` | low-centred body with a ring tail |
 | `ui` | tiny, bright, instant |
+| `footstep` | a very short, low-mid thud/tap |
+| `powerup` | a short bright rising flourish |
 | `ambience` | sustained, dark, low crest, looping |
 | `bgm` | a mixed musical loop |
 

@@ -21,10 +21,12 @@ pub fn parse_archetype(s: &str) -> anyhow::Result<Archetype> {
         "jump" => Archetype::Jump,
         "impact" => Archetype::Impact,
         "ui" => Archetype::Ui,
+        "footstep" => Archetype::Footstep,
+        "powerup" => Archetype::Powerup,
         "ambience" => Archetype::Ambience,
         "bgm" => Archetype::Bgm,
         other => anyhow::bail!(
-            "--archetype must be laser, coin, jump, impact, ui, ambience, or bgm, got '{other}'"
+            "--archetype must be laser, coin, jump, impact, ui, footstep, powerup, ambience, or bgm, got '{other}'"
         ),
     })
 }
@@ -71,7 +73,9 @@ mod tests {
 
     #[test]
     fn every_archetype_name_parses() {
-        for name in ["laser", "coin", "jump", "impact", "ui", "ambience", "bgm"] {
+        for name in [
+            "laser", "coin", "jump", "impact", "ui", "footstep", "powerup", "ambience", "bgm",
+        ] {
             assert!(parse_archetype(name).is_ok(), "parses: {name}");
         }
         let err = parse_archetype("pew-pew").err().unwrap();

@@ -14,6 +14,9 @@
   (`rate` 0..40 Hz, `depth` 0..1) as a closed-form processor. A modulated
   `gain` renders offline but can't stream; `tremolo` streams natively and
   byte-identically at any block size.
+- **New `review` archetypes: `footstep`, `powerup`** — target tables for two
+  more staple game SFX (a very short low-mid thud; a short bright rising
+  flourish), in `tono review --archetype` and the library alike.
 - **`StreamGraph::blockers(doc)`** — the streaming renderer's coverage check
   as an actionable report: one `StreamBlocker` per blocking feature
   (`normalize`, `loop` playback, Haas/Wide stereo, a `tracks` root, RNG nodes
