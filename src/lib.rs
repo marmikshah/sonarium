@@ -17,6 +17,7 @@ pub use tono_core::{
 };
 
 pub mod audio;
+pub mod audition;
 pub mod diff;
 pub mod fit;
 pub mod imaging;

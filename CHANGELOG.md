@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### Added
+- **`tono presets [NAME]` / `tono catalog [NAME]`** — the factory sounds from
+  the shell. No NAME lists (11 presets with blurbs; 24 catalog voices by
+  family); with NAME it renders a demo — a preset plays a C-major arpeggio
+  through the live `Instrument` engine bounced offline, a catalog voice plays
+  a scale resolving to a chord (a two-bar groove for the drum kits) — with
+  the full `tono render` output set (audio + images + stats).
 - **`tono fit REF.wav DOC.json`** — target-driven sound design, automated.
   `tono match` scores a doc against a reference WAV; `tono fit` closes the
   loop with a deterministic seeded hill-climb over `vary::mutate` — every

@@ -62,6 +62,16 @@ USAGE:
         Audition a SoundDoc through the speakers (needs the `play`
         feature: cargo install tono --features play).
 
+    tono presets [NAME] [-o DIR] [--format wav|flac|ogg]
+        No NAME: list the 11 factory presets. With NAME: render the
+        preset's demo riff (a C-major arpeggio through the live
+        Instrument engine) — the same outputs as 'tono render'.
+
+    tono catalog [NAME] [-o DIR] [--format wav|flac|ogg]
+        No NAME: list the 24 catalog voices by family. With NAME: render
+        the voice's demo — a C-major scale resolving to a chord (a
+        two-bar groove for the drum kits).
+
     tono --version | --help
 
 The SoundDoc format and the node vocabulary are documented in docs/cookbook.md
@@ -80,6 +90,8 @@ fn main() -> anyhow::Result<()> {
         Some("fit") => fit_cmd(&args[2..]),
         Some("review") => review_cmd(&args[2..]),
         Some("play") => play_cmd(&args[2..]),
+        Some("presets") => presets_cmd(&args[2..]),
+        Some("catalog") => catalog_cmd(&args[2..]),
         Some("--version") | Some("-V") => {
             println!("tono {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -577,6 +589,86 @@ fn play_cmd(_args: &[String]) -> anyhow::Result<()> {
     anyhow::bail!(
         "this build has no audio playback — rebuild with `cargo install tono --features play`"
     )
+}
+
+/// `tono presets` — list the factory presets, or render one's demo riff.
+fn presets_cmd(args: &[String]) -> anyhow::Result<()> {
+    let usage = "tono presets [NAME] [-o DIR] [--format wav|flac|ogg]";
+    let cli = Cli::parse(args, &["-o", "--out", "--format"], &[])?;
+    let [name] = match cli.positionals.as_slice() {
+        [] => {
+            print!("{}", tono::audition::preset_list());
+            return Ok(());
+        }
+        [name] => [name],
+        more => anyhow::bail!("unexpected argument '{}'\nusage: {usage}", more[1]),
+    };
+    let preset = tono::audition::find_preset(name)
+        .ok_or_else(|| anyhow::anyhow!("unknown preset '{name}' — run 'tono presets' to list"))?;
+    let out_dir = PathBuf::from(cli.flag(&["-o", "--out"]).unwrap_or("."));
+    let format = parse_format(cli.flag(&["--format"]))?;
+    fs::create_dir_all(&out_dir)?;
+    let sample_rate = 48_000;
+    let (left, right) = tono::audition::bounce_preset(preset, sample_rate)?;
+    write_bounce(
+        sanitize_stem(preset.name)?.as_str(),
+        &out_dir,
+        format,
+        sample_rate,
+        &left,
+        &right,
+    )
+}
+
+/// `tono catalog` — list the catalog voices, or render one's demo.
+fn catalog_cmd(args: &[String]) -> anyhow::Result<()> {
+    let usage = "tono catalog [NAME] [-o DIR] [--format wav|flac|ogg]";
+    let cli = Cli::parse(args, &["-o", "--out", "--format"], &[])?;
+    let [slug] = match cli.positionals.as_slice() {
+        [] => {
+            print!("{}", tono::audition::catalog_list());
+            return Ok(());
+        }
+        [slug] => [slug],
+        more => anyhow::bail!("unexpected argument '{}'\nusage: {usage}", more[1]),
+    };
+    let voice = tono::audition::find_voice(slug)
+        .ok_or_else(|| anyhow::anyhow!("unknown voice '{slug}' — run 'tono catalog' to list"))?;
+    let out_dir = PathBuf::from(cli.flag(&["-o", "--out"]).unwrap_or("."));
+    let format = parse_format(cli.flag(&["--format"]))?;
+    fs::create_dir_all(&out_dir)?;
+    let doc = tono::audition::voice_demo_doc(&voice)?;
+    render_to_dir(&doc, &sanitize_stem(slug)?, &out_dir, format)
+}
+
+/// Write a bounced stereo render: the audio file plus the two feedback images
+/// and the stats JSON — the same output set as `tono render`, for material
+/// that didn't come from a document (the preset auditions).
+fn write_bounce(
+    stem: &str,
+    out_dir: &Path,
+    format: &str,
+    sample_rate: u32,
+    left: &[f32],
+    right: &[f32],
+) -> anyhow::Result<()> {
+    let audio_path = out_dir.join(format!("{stem}.{format}"));
+    match format {
+        "flac" => tono::audio::write_flac(&audio_path, &[left, right], sample_rate, 16)?,
+        "ogg" => tono::audio::write_ogg(&audio_path, &[left, right], sample_rate, 0.7)?,
+        _ => tono::audio::write_wav_stereo(&audio_path, left, right, sample_rate, 16)?,
+    }
+    let mono: Vec<f32> = left.iter().zip(right).map(|(l, r)| 0.5 * (l + r)).collect();
+    let png = out_dir.join(format!("{stem}.png"));
+    let analysis = tono::imaging::analyze_to_disk(&mono, Some((left, right)), sample_rate, &png)?;
+    let stats = out_dir.join(format!("{stem}.stats.json"));
+    fs::write(&stats, serde_json::to_string_pretty(&analysis)?)?;
+
+    println!("{}", audio_path.display());
+    println!("{}", png.display());
+    println!("{}", analysis.waveform_png_path);
+    println!("{}", stats.display());
+    Ok(())
 }
 
 #[cfg(all(test, not(feature = "play")))]
