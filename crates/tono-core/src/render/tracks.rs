@@ -106,6 +106,12 @@ fn lane_for(
     if lane.points.is_empty() {
         return Some(vec![default; n]);
     }
+    // A single breakpoint holds flat — and guards the segment scan below:
+    // with one point a NaN sample time (or a NaN point time on an
+    // unvalidated doc) would fall past both early returns into pts[idx + 1].
+    if lane.points.len() == 1 {
+        return Some(vec![lane.points[0].v; n]);
+    }
     let mut pts = lane.points.clone();
     pts.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
     // Linear interpolation over the sorted breakpoints, holding flat past

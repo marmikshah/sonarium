@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixed
+- **Two contract violations found by the new proptest suite**, each pinned by
+  a regression test: a tracks automation lane with exactly one point whose
+  time is NaN (or any single-point lane at `sample_rate` 0) indexed past the
+  lane end and panicked the renderer on an unvalidated doc — a single
+  breakpoint now holds flat; and `vary::mutate`'s multiplicative jitter
+  overflowed parameters validated without an upper bound (modal decay, filter
+  q, ADSR times, …) to ±inf, breaking its still-valid promise — the jitter
+  now clamps to `[min, f32::MAX]`.
+
 ### Added
 - **Criterion benchmarks + proptest validation fuzzing** — `make bench`
   runs five criterion benches over the render hot path (osc/env, a tracks
