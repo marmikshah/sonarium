@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Added
+- **Criterion benchmarks + proptest validation fuzzing** — `make bench`
+  runs five criterion benches over the render hot path (osc/env, a tracks
+  mix, a piano seq, an FX chain, streaming fill), so a perf regression can't
+  ride in silently next to a correct refactor. `tests/fuzz_validation.rs`
+  property-tests the crate contract: parse/validate never panics, a validated
+  doc renders finite samples, an unvalidated (poisoned) doc still can't panic
+  the renderer, and `mutate` always re-validates.
 - **New `convolve` node** — convolution reverb with a deterministic
   synthetic IR (no IR files): a seeded noise burst decaying to −60 dB over
   `decay`, darkened by `damp`, after `predelay`, convolved FFT-fast and
