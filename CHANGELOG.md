@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Added
+- **`StreamGraph::blockers(doc)`** — the streaming renderer's coverage check
+  as an actionable report: one `StreamBlocker` per blocking feature
+  (`normalize`, `loop` playback, Haas/Wide stereo, a `tracks` root, RNG nodes
+  under `engine < 2`, the sampler seq, a modulated filter/EQ/gain cutoff),
+  each with a Display message naming the fix. `try_from_doc` now delegates
+  its gate to it, so the silent `Option` fallback and the report can never
+  disagree (a test pins the equivalence).
 - **`tono presets [NAME]` / `tono catalog [NAME]`** — the factory sounds from
   the shell. No NAME lists (11 presets with blurbs; 24 catalog voices by
   family); with NAME it renders a demo — a preset plays a C-major arpeggio
