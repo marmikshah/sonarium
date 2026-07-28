@@ -3,6 +3,19 @@
 ## Unreleased
 
 ### Added
+- **New `convolve` node** — convolution reverb with a deterministic
+  synthetic IR (no IR files): a seeded noise burst decaying to −60 dB over
+  `decay`, darkened by `damp`, after `predelay`, convolved FFT-fast and
+  truncated to the document length like `reverb`. rustfft is a full
+  dependency now (previously analysis-only).
+- **New `granular` node** — granular texture: Hann-windowed grains of the
+  input at `density`, repitched by `pitch` with seeded `spread` jitter (the
+  whole schedule is drawn up front, so it's deterministic). Magic shimmer,
+  wind, UI clouds.
+- Both are offline-only (they need the whole input buffer) and say so through
+  the streaming coverage report: `StreamBlocker::OfflineEffect` names the
+  node and the fix, and `try_from_doc`'s fallback stays in agreement (pinned
+  by the blockers corpus tests).
 - **Tracks-level sidechain ducking** — a track can carry
   `sidechain: { source, amount, attack, release }` and duck following another
   track's positioned, post-fader signal (the kick→pad pump at the mixer

@@ -17,7 +17,10 @@ pub(crate) use seq::seq_to_signal;
 
 use crate::dsl::{Adsr, Node, Playback, Shape, SoundDoc, Value};
 use crate::dsp::{Rng, node_path, node_seed, peak_limit};
-use effects::{biquad, chorus, compress, drive_adaa, flanger, modal_bank, phaser, reverb};
+use effects::{
+    ConvolveSpec, GranularSpec, biquad, chorus, compress, convolve, drive_adaa, flanger, granular,
+    modal_bank, phaser, reverb,
+};
 use osc::{
     dust_signal, fm_signal, impact_signal, noise_signal, osc_signal, saw_signal, square_signal,
     super_signal, tri_signal, wavetable_signal,
@@ -404,6 +407,50 @@ fn apply_processor(
             release,
             makeup,
         } => compress(input, *threshold, *ratio, *attack, *release, *makeup, sr),
+        Node::Convolve {
+            decay,
+            size,
+            predelay,
+            damp,
+            mix,
+        } => {
+            // The IR comes from the node's structurally-seeded stream — stable
+            // per graph position, no draws from the shared render stream.
+            convolve(
+                input,
+                ConvolveSpec {
+                    decay: *decay,
+                    size: *size,
+                    predelay: *predelay,
+                    damp: *damp,
+                    mix: *mix,
+                },
+                sr,
+                node_seed(path),
+            )
+        }
+        Node::Granular {
+            grain_ms,
+            density,
+            pitch,
+            spread,
+            mix,
+        } => {
+            // The grain schedule is drawn from the node's structurally-seeded
+            // stream — stable per graph position.
+            granular(
+                input,
+                GranularSpec {
+                    grain_ms: *grain_ms,
+                    density: *density,
+                    pitch: *pitch,
+                    spread: *spread,
+                    mix: *mix,
+                },
+                sr,
+                node_seed(path),
+            )
+        }
         // Every processor variant is matched above; this fires only if a new
         // processor is added to the DSL without a render arm (the same guard
         // render_node keeps for sources) — loud, never a silent identity.

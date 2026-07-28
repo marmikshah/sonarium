@@ -154,6 +154,30 @@ fn default_impact_hardness() -> f32 {
 fn default_dust_decay() -> f32 {
     0.02
 }
+fn default_convolve_decay() -> f32 {
+    1.5
+}
+fn default_convolve_damp() -> f32 {
+    0.3
+}
+fn default_convolve_mix() -> f32 {
+    0.35
+}
+fn default_granular_grain_ms() -> f32 {
+    80.0
+}
+fn default_granular_density() -> f32 {
+    25.0
+}
+fn default_granular_pitch() -> f32 {
+    1.0
+}
+fn default_granular_spread() -> f32 {
+    0.3
+}
+fn default_granular_mix() -> f32 {
+    0.5
+}
 
 /// A node in the synthesis graph. Every node evaluates to a mono signal.
 #[non_exhaustive]
@@ -584,6 +608,73 @@ pub enum Node {
         #[serde(default)]
         makeup: f32,
     },
+    /// Convolution reverb with a synthesized impulse response — the "put it in
+    /// a real space" effect, with zero assets: instead of loading an IR file,
+    /// the node *generates* its own IR deterministically from its parameters
+    /// and its structural position in the graph (the same node at the same
+    /// graph position always builds the same IR — edit-stable like the
+    /// structurally-seeded RNG sources of engine 2 and later). The IR is a
+    /// white-noise burst under an exponential
+    /// decay envelope reaching −60 dB at `decay` seconds (RT60-style), capped
+    /// at `size` seconds, darkened over time by a one-pole lowpass whose
+    /// cutoff falls per `damp`, and shifted right by `predelay` (the gap
+    /// between the dry hit and the room's answer — larger rooms answer later).
+    /// Convolution is FFT-based (single-shot, the whole block at once) and
+    /// normalized to unit IR energy, so the wet level stays put as `decay` /
+    /// `size` change. Like `reverb`, the tail folds into the document: the
+    /// output is truncated to the document length rather than extended. `mix`
+    /// crossfades dry/wet (0 = transparent passthrough). This node is
+    /// **offline only**: convolution needs the whole input buffer, so the
+    /// streaming renderer refuses it with a named reason (bounce it offline
+    /// and keep the streamed graph causal).
+    Convolve {
+        /// RT60-ish decay time in seconds (tail reaches −60 dB at this point).
+        #[serde(default = "default_convolve_decay")]
+        decay: f32,
+        /// IR length cap in seconds (0 = `decay`, i.e. no extra truncation).
+        #[serde(default)]
+        size: f32,
+        /// Silence before the IR starts, in seconds (pre-delay).
+        #[serde(default)]
+        predelay: f32,
+        /// High-frequency damping, 0..1: how fast the tail darkens (0 = the
+        /// burst stays white, 1 = it closes to a rumble by the end).
+        #[serde(default = "default_convolve_damp")]
+        damp: f32,
+        /// Dry/wet mix, 0..1.
+        #[serde(default = "default_convolve_mix")]
+        mix: f32,
+    },
+    /// Granular texture: chops the incoming signal into overlapping
+    /// Hann-windowed grains of `grain_ms` milliseconds at `density` grains per
+    /// second, replays each at `pitch` (playback ratio — 2 = octave up, 0.5 =
+    /// octave down) with deterministic onset/source jitter and detune of depth
+    /// `spread` (drawn from the node's structurally-seeded stream in a fixed
+    /// order, so the texture is stable under edits), sums them (normalized by
+    /// the window overlap so loudness tracks the dry signal), and crossfades
+    /// with the dry signal per `mix`. Frozen pads and shimmer from any source
+    /// material: chain it after a note or a noise burst and let `spread`
+    /// smear it into a cloud. `mix` 0 = transparent passthrough. **Offline
+    /// only** — grains read the whole input out of order, so the streaming
+    /// renderer refuses it with a named reason (bounce it offline and keep the
+    /// streamed graph causal).
+    Granular {
+        /// Grain length in milliseconds (5..=500).
+        #[serde(default = "default_granular_grain_ms")]
+        grain_ms: f32,
+        /// Grains per second (overlap = grain_ms × density / 1000).
+        #[serde(default = "default_granular_density")]
+        density: f32,
+        /// Grain playback ratio (1 = source pitch, 2 = octave up).
+        #[serde(default = "default_granular_pitch")]
+        pitch: f32,
+        /// Randomization depth, 0..1: onset jitter and per-grain detune.
+        #[serde(default = "default_granular_spread")]
+        spread: f32,
+        /// Dry/wet mix, 0..1.
+        #[serde(default = "default_granular_mix")]
+        mix: f32,
+    },
 }
 
 impl Node {
@@ -613,6 +704,8 @@ impl Node {
                 | Node::Phaser { .. }
                 | Node::Compress { .. }
                 | Node::Duck { .. }
+                | Node::Convolve { .. }
+                | Node::Granular { .. }
         )
     }
 
@@ -664,7 +757,9 @@ impl Node {
             | Node::Chorus { .. }
             | Node::Flanger { .. }
             | Node::Phaser { .. }
-            | Node::Compress { .. } => ChildrenKind::None,
+            | Node::Compress { .. }
+            | Node::Convolve { .. }
+            | Node::Granular { .. } => ChildrenKind::None,
         };
         Children { kind }
     }
@@ -712,7 +807,9 @@ impl Node {
             | Node::Chorus { .. }
             | Node::Flanger { .. }
             | Node::Phaser { .. }
-            | Node::Compress { .. } => ChildrenMutKind::None,
+            | Node::Compress { .. }
+            | Node::Convolve { .. }
+            | Node::Granular { .. } => ChildrenMutKind::None,
         };
         ChildrenMut { kind }
     }

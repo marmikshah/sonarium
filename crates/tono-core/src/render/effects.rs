@@ -1,9 +1,12 @@
-//! Filters and effect processors: the biquad family, reverb, the waveshaper
-//! (with ADAA), the modal resonator bank, modulation effects, and dynamics.
+//! Filters and effect processors: the biquad family, reverb, convolution, the
+//! granular texture, the waveshaper (with ADAA), the modal resonator bank,
+//! modulation effects, and dynamics.
 
 use super::{Signal, eval_value};
 use crate::dsl::{DriveShape, Mode, Value};
-use std::f32::consts::{LN_2, TAU};
+use crate::dsp::Rng;
+use rustfft::{FftPlanner, num_complex::Complex};
+use std::f32::consts::{LN_2, PI, TAU};
 
 #[derive(Clone, Copy)]
 pub(crate) enum FilterKind {
@@ -427,4 +430,205 @@ pub(super) fn compress(
         out.push(x * g * makeup);
     }
     out
+}
+
+/// The `convolve` node's parameters, bundled so the processor function stays
+/// under the arity cap.
+#[derive(Clone, Copy)]
+pub(super) struct ConvolveSpec {
+    /// RT60-ish decay time in seconds.
+    pub decay: f32,
+    /// IR length cap in seconds (0 = `decay`).
+    pub size: f32,
+    /// Pre-delay in seconds.
+    pub predelay: f32,
+    /// High-frequency damping, 0..1.
+    pub damp: f32,
+    /// Dry/wet mix, 0..1.
+    pub mix: f32,
+}
+
+/// Synthesize the impulse response of a [`convolve`] node, deterministically
+/// from `seed` (the node's structural stream key, so the same node at the same
+/// graph position always builds the same IR — zero assets, no IR files):
+/// a white-noise burst under an exponential envelope reaching −60 dB at
+/// `decay` seconds, truncated at `size` (0 = `decay`), darkened over time by a
+/// one-pole lowpass whose cutoff falls from ~0.45·sr toward 100 Hz as `damp`
+/// goes 0 → 1, preceded by `predelay` seconds of silence. Normalized to unit
+/// energy, so the wet level stays put as `decay`/`size` change.
+fn synth_ir(decay: f32, size: f32, predelay: f32, damp: f32, sr: u32, seed: u64) -> Vec<f32> {
+    let srf = sr as f32;
+    // validate() caps all three at 30 s; the clamps guard a direct render of
+    // an unvalidated doc from an unbounded allocation (delay.secs pattern).
+    let decay = decay.clamp(1e-3, 30.0);
+    let ir_secs = if size > 0.0 {
+        size.clamp(1e-3, 30.0)
+    } else {
+        decay
+    };
+    let pre = (predelay.clamp(0.0, 30.0) * srf) as usize;
+    let len = ((ir_secs * srf) as usize).max(1);
+    let mut rng = Rng::new(seed);
+    let mut ir = vec![0.0f32; pre + len];
+    let mut lp = 0.0f32;
+    for (i, s) in ir.iter_mut().skip(pre).enumerate() {
+        let t = i as f32 / srf;
+        let env = (crate::dsp::NEG_LN_1000 * t / decay).exp();
+        // The cutoff falls linearly across the tail as damp goes 0 → 1
+        // (0 = the burst stays ~white, 1 = it closes to 100 Hz by the end).
+        let fc = (0.45 * srf * (1.0 - damp.clamp(0.0, 1.0) * t / ir_secs)).max(100.0);
+        let a = 1.0 - (-TAU * fc / srf).exp();
+        lp += a * (rng.bi() - lp);
+        *s = lp * env;
+    }
+    let energy = ir.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if energy > 0.0 {
+        for x in ir.iter_mut() {
+            *x /= energy;
+        }
+    }
+    ir
+}
+
+/// Convolution reverb: FFT convolve the input with the node's synthesized IR
+/// (single-shot — the whole block at once) and crossfade dry/wet per `mix`.
+/// Like [`reverb`], the tail folds into the document: the output is truncated
+/// to the input length rather than extended. Offline only — the whole input
+/// buffer must be present, so the streaming renderer refuses this node.
+pub(super) fn convolve(input: &[f32], spec: ConvolveSpec, sr: u32, seed: u64) -> Signal {
+    let mix = spec.mix.clamp(0.0, 1.0);
+    if mix == 0.0 {
+        // Transparent passthrough, bit-identical by construction.
+        return input.to_vec();
+    }
+    let ir = synth_ir(spec.decay, spec.size, spec.predelay, spec.damp, sr, seed);
+    let n = input.len();
+    let len = (n + ir.len() - 1).next_power_of_two();
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(len);
+    let ifft = planner.plan_fft_inverse(len);
+    let zero = Complex::new(0.0f32, 0.0f32);
+    let mut a: Vec<Complex<f32>> = input
+        .iter()
+        .map(|&x| Complex::new(x, 0.0))
+        .chain(std::iter::repeat_n(zero, len - n))
+        .collect();
+    let mut b: Vec<Complex<f32>> = ir
+        .iter()
+        .map(|&x| Complex::new(x, 0.0))
+        .chain(std::iter::repeat_n(zero, len - ir.len()))
+        .collect();
+    fft.process(&mut a);
+    fft.process(&mut b);
+    for (x, &y) in a.iter_mut().zip(&b) {
+        *x *= y;
+    }
+    ifft.process(&mut a);
+    let scale = 1.0 / len as f32;
+    input
+        .iter()
+        .zip(&a)
+        .map(|(&dry, w)| dry * (1.0 - mix) + (w.re * scale) * mix)
+        .collect()
+}
+
+/// The `granular` node's parameters, bundled so the processor function stays
+/// under the arity cap.
+#[derive(Clone, Copy)]
+pub(super) struct GranularSpec {
+    /// Grain length in milliseconds.
+    pub grain_ms: f32,
+    /// Grains per second.
+    pub density: f32,
+    /// Grain playback ratio.
+    pub pitch: f32,
+    /// Randomization depth, 0..1.
+    pub spread: f32,
+    /// Dry/wet mix, 0..1.
+    pub mix: f32,
+}
+
+/// One grain of a [`granular`] schedule: where it lands in the output, where
+/// it starts reading the input, and its playback ratio.
+struct Grain {
+    out: usize,
+    src: usize,
+    ratio: f32,
+}
+
+/// Granular texture: the input is chopped into overlapping Hann-windowed
+/// grains at `density` grains/sec; each grain replays the input from its
+/// (jittered) source position at `pitch` (playback ratio), with `spread`
+/// scaling the onset/source jitter and a per-grain detune of up to ±half an
+/// octave. The whole schedule is drawn up front from the node's structural
+/// stream in a fixed per-grain draw order (onset jitter → detune → source
+/// jitter), so the texture is deterministic and edit-stable. Grains are
+/// summed and normalized by the window-overlap envelope, so loudness tracks
+/// the dry signal, then crossfaded per `mix`. Offline only — grains read the
+/// whole input out of order, so the streaming renderer refuses this node.
+pub(super) fn granular(input: &[f32], spec: GranularSpec, sr: u32, seed: u64) -> Signal {
+    let mix = spec.mix.clamp(0.0, 1.0);
+    if mix == 0.0 {
+        // Transparent passthrough, bit-identical by construction.
+        return input.to_vec();
+    }
+    let srf = sr as f32;
+    let n = input.len();
+    // validate() bounds every knob; the clamps guard direct renders.
+    let g = ((spec.grain_ms.clamp(5.0, 500.0) / 1000.0) * srf).max(1.0) as usize;
+    let hop = (srf / spec.density.clamp(0.1, 200.0)).max(1.0);
+    let pitch = spec.pitch.clamp(0.25, 4.0);
+    let spread = spec.spread.clamp(0.0, 1.0);
+    // Hann window (sin² — the analysis module's window).
+    let win: Vec<f32> = (0..g)
+        .map(|i| {
+            let x = PI * i as f32 / (g as f32 - 1.0).max(1.0);
+            x.sin().powi(2)
+        })
+        .collect();
+    let count = (n as f32 / hop).ceil() as usize + 1;
+    let mut rng = Rng::new(seed);
+    let grains: Vec<Grain> = (0..count)
+        .map(|k| {
+            let onset = k as f32 * hop;
+            // Fixed draw order per grain, independent of everything else.
+            let out_j = rng.bi() * spread * hop;
+            let detune = rng.bi() * spread * 0.5; // octaves
+            let src_j = rng.bi() * spread * hop;
+            Grain {
+                out: (onset + out_j).max(0.0) as usize,
+                src: (onset + src_j).max(0.0) as usize,
+                ratio: pitch * 2f32.powf(detune),
+            }
+        })
+        .collect();
+    let mut wet = vec![0.0f32; n];
+    let mut wsum = vec![0.0f32; n];
+    for gr in &grains {
+        for (j, &w) in win.iter().enumerate() {
+            let o = gr.out + j;
+            if o >= n {
+                break;
+            }
+            // Fractional-delay read (linear interpolation) of the source.
+            let read = gr.src as f32 + j as f32 * gr.ratio;
+            let i0 = read as usize;
+            if i0 + 1 >= n {
+                break;
+            }
+            let frac = read - i0 as f32;
+            wet[o] += (input[i0] * (1.0 - frac) + input[i0 + 1] * frac) * w;
+            wsum[o] += w;
+        }
+    }
+    input
+        .iter()
+        .enumerate()
+        .map(|(i, &dry)| {
+            // Normalize by the overlap envelope; the 1.0 floor fades the
+            // sparsely covered doc edges instead of boosting them.
+            let w = wet[i] / wsum[i].max(1.0);
+            dry * (1.0 - mix) + w * mix
+        })
+        .collect()
 }
