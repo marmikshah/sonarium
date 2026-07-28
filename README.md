@@ -78,6 +78,7 @@ human *or an agent* needs to author sound by inspection. The
   ten minutes (hear a sound, change it on purpose).
 - **Make sounds** — the [cookbook](docs/cookbook.md), then `tono diff`,
   `tono match REF.wav DOC.json`, and `tono render --watch` for the loop.
+  Hear the factory sounds with `tono presets` / `tono catalog`.
 - **Embed in a game** — [docs/runtime.md](docs/runtime.md) (Engine/Mixer
   runtime, parametric patches).
 - **Python** — [crates/tono-py](crates/tono-py).
