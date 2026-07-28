@@ -123,6 +123,22 @@ fn rows(reference: &Analysis, candidate: &Analysis) -> Vec<Row> {
     v
 }
 
+/// The match score: RMS distance between reference and candidate in
+/// per-metric tolerance units (0 = identical at these tolerances, lower is
+/// closer). `tono fit` hill-climbs this number.
+pub fn score(reference: &Analysis, candidate: &Analysis) -> f32 {
+    let rows = rows(reference, candidate);
+    (rows
+        .iter()
+        .map(|r| {
+            let s = r.delta.abs() / r.tolerance;
+            s * s
+        })
+        .sum::<f32>()
+        / rows.len() as f32)
+        .sqrt()
+}
+
 /// Score `candidate` against a decoded reference (`(mono, sample_rate)`).
 /// Lower is closer; 0 means identical within the metric tolerances.
 pub fn match_report(reference: &Path, candidate: &SoundDoc) -> Result<String> {
@@ -132,15 +148,7 @@ pub fn match_report(reference: &Path, candidate: &SoundDoc) -> Result<String> {
     let cand_stats = analysis::stats(&rendered, candidate.sample_rate);
 
     let rows = rows(&ref_stats, &cand_stats);
-    let score = (rows
-        .iter()
-        .map(|r| {
-            let s = r.delta.abs() / r.tolerance;
-            s * s
-        })
-        .sum::<f32>()
-        / rows.len() as f32)
-        .sqrt();
+    let score = score(&ref_stats, &cand_stats);
     let mut worst: Vec<&Row> = rows.iter().collect();
     worst.sort_by(|a, b| (b.delta.abs() / b.tolerance).total_cmp(&(a.delta.abs() / a.tolerance)));
 

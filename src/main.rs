@@ -47,6 +47,12 @@ USAGE:
         Score a SoundDoc against a reference WAV — how close it is and
         where it misses (brightness, loudness, envelope, duration).
 
+    tono fit REF.wav DOC.json [-o FITTED.json] [--rounds N] [--amount 0..1] [--seed N]
+        Hill-climb the doc's parameters toward the reference WAV: a
+        deterministic seeded search over vary mutations that keeps every
+        improvement, then writes the best doc (default <doc>.fit.json)
+        and prints its final match report.
+
     tono review FILE.json [--archetype laser|coin|jump|impact|ui|ambience|bgm]
         Grade a SoundDoc against the ship checklist (and an archetype's
         targets): every finding names the measured value, the target, and
@@ -71,6 +77,7 @@ fn main() -> anyhow::Result<()> {
         Some("import") => import_cmd(&args[2..]),
         Some("diff") => diff_cmd(&args[2..]),
         Some("match") => match_cmd(&args[2..]),
+        Some("fit") => fit_cmd(&args[2..]),
         Some("review") => review_cmd(&args[2..]),
         Some("play") => play_cmd(&args[2..]),
         Some("--version") | Some("-V") => {
@@ -456,6 +463,75 @@ fn match_cmd(args: &[String]) -> anyhow::Result<()> {
     print!(
         "{}",
         tono::target::match_report(Path::new(reference), &doc)?
+    );
+    Ok(())
+}
+
+/// `tono fit` — hill-climb a doc toward a reference WAV, write the best doc.
+fn fit_cmd(args: &[String]) -> anyhow::Result<()> {
+    let usage =
+        "tono fit REF.wav DOC.json [-o FITTED.json] [--rounds N] [--amount 0..1] [--seed N]";
+    let cli = Cli::parse(
+        args,
+        &["-o", "--out", "--rounds", "--amount", "--seed"],
+        &[],
+    )?;
+    let [reference, candidate] = match cli.positionals.as_slice() {
+        [a, b] => [a, b],
+        _ => anyhow::bail!("usage: {usage}"),
+    };
+    let rounds: u32 = match cli.flag(&["--rounds"]) {
+        Some(v) => v
+            .parse()
+            .map_err(|_| anyhow::anyhow!("--rounds must be a positive integer, got '{v}'"))?,
+        None => 32,
+    };
+    if rounds == 0 || rounds > 4096 {
+        anyhow::bail!("--rounds must be in 1..=4096, got {rounds}");
+    }
+    let amount: f32 = match cli.flag(&["--amount"]) {
+        Some(v) => v
+            .parse()
+            .map_err(|_| anyhow::anyhow!("--amount must be a number, got '{v}'"))?,
+        None => 0.25,
+    };
+    if !(0.0..=1.0).contains(&amount) {
+        anyhow::bail!("--amount must be in 0..=1, got {amount}");
+    }
+    let seed: u64 = match cli.flag(&["--seed"]) {
+        Some(v) => v
+            .parse()
+            .map_err(|_| anyhow::anyhow!("--seed must be an integer, got '{v}'"))?,
+        None => 0,
+    };
+    let out = match cli.flag(&["-o", "--out"]) {
+        Some(o) => PathBuf::from(o),
+        None => {
+            // A defaulted output must never silently clobber an existing file.
+            let default = Path::new(candidate).with_extension("fit.json");
+            if default.exists() {
+                anyhow::bail!(
+                    "{} already exists — pass -o to choose a different output",
+                    default.display()
+                );
+            }
+            default
+        }
+    };
+
+    let doc = load_doc(candidate)?;
+    let result = tono::fit::fit(Path::new(reference), &doc, rounds, amount, seed)?;
+    fs::write(&out, serde_json::to_string_pretty(&result.doc)?)?;
+    println!(
+        "fit: {:.2} → {:.2} over {} rounds ({} improvements)",
+        result.initial, result.score, result.rounds, result.improvements
+    );
+    println!("{}", out.display());
+    // The full metric table for the fitted doc, so the remaining gap is
+    // visible without a second command.
+    print!(
+        "{}",
+        tono::target::match_report(Path::new(reference), &result.doc)?
     );
     Ok(())
 }
