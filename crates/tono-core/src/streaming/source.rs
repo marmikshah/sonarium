@@ -7,7 +7,7 @@ use super::proc::{Proc, try_proc};
 use super::value::Val;
 use crate::dsl::{Node, NoiseColor, SeqWave, Shape, SuperWave, Value};
 use crate::dsp::{Rng, adsr_env, node_path, node_seed};
-use crate::render::{osc, poly_blep, seq_to_signal};
+use crate::render::{osc, poly_blep, seq_to_signal, wavetable_frames, wavetable_lookup};
 
 /// Per-color filter state for a streaming noise node.
 pub(super) enum NoiseKind {
@@ -54,6 +54,13 @@ pub(super) enum Src {
         phases: Vec<f32>,
         ratios: Vec<f32>,
         scale: f32,
+        srf: f32,
+    },
+    Wavetable {
+        frames: Vec<Vec<f32>>,
+        phase: f32,
+        freq: Val,
+        position: Val,
         srf: f32,
     },
     Impact {
@@ -188,6 +195,18 @@ impl Src {
                     phases[k] -= phases[k].floor();
                 }
                 acc * *scale
+            }
+            Src::Wavetable {
+                frames,
+                phase,
+                freq,
+                position,
+                srf,
+            } => {
+                let v = wavetable_lookup(frames, position.eval(t), *phase);
+                *phase += freq.eval(t).max(0.0) * pitch / *srf;
+                *phase -= phase.floor();
+                v
             }
             Src::Impact { w, norm } => {
                 if t < *w {
@@ -361,6 +380,17 @@ pub(super) fn try_src(node: &Node, sr: u32, n: usize, engine: u32, path: u64) ->
                 srf,
             }
         }
+        Node::Wavetable {
+            wave,
+            freq,
+            position,
+        } => Src::Wavetable {
+            frames: wavetable_frames(*wave),
+            phase: 0.0,
+            freq: v(freq),
+            position: v(position),
+            srf,
+        },
         Node::Impact { hardness, velocity } => {
             let h = hardness.clamp(0.0, 1.0);
             let vel = velocity.clamp(0.0, 1.0);

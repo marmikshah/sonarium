@@ -90,7 +90,8 @@ fn transpose_node(node: &mut Node, ratio: f32) {
         | Node::Sawtooth { freq }
         | Node::Sine { freq }
         | Node::Fm { freq, .. }
-        | Node::Super { freq, .. } => transpose_value(freq, ratio),
+        | Node::Super { freq, .. }
+        | Node::Wavetable { freq, .. } => transpose_value(freq, ratio),
         Node::Seq { notes, .. } => notes
             .iter_mut()
             .for_each(|n| transpose_value(&mut n.pitch, ratio)),
@@ -251,6 +252,14 @@ fn mutate_node(node: &mut Node, amount: f32, rng: &mut Rng) {
             mutate_freq(freq, amount, rng);
             // Clamped to the validation cap (10 octaves) — jitter runs to ×2.
             *detune_cents = jitter(*detune_cents, amount, rng, 0.0).min(12_000.0);
+        }
+        Node::Wavetable { freq, position, .. } => {
+            mutate_freq(freq, amount, rng);
+            // Jitter a constant morph position (unit-clamped); a modulated
+            // position is musical motion — leave it alone, like note names.
+            if let Value::Const(c) = position {
+                *c = jitter_unit(*c, amount, rng);
+            }
         }
         Node::Gain { amount: amt } => mutate_value(amt, amount, rng),
         Node::Bitcrush { .. } | Node::Downsample { .. } => {}

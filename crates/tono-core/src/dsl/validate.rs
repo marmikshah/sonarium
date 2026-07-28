@@ -585,6 +585,12 @@ fn validate_node_at(node: &Node, depth: usize) -> Result<(), String> {
             }
             validate_value(index, "fm.index")
         }
+        Node::Wavetable { freq, position, .. } => {
+            validate_freq_value(freq, "wavetable.freq")?;
+            // Const positions are bounded here; modulated ones clamp at render
+            // time (same policy as square.duty).
+            validate_unit_value(position, "wavetable.position")
+        }
         // Bound exhaustively (no `..`): the compiler then forces a validation
         // decision for every knob this variant grows.
         Node::Seq {

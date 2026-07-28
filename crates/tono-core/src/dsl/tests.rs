@@ -565,3 +565,34 @@ fn children_covers_every_nested_graph() {
     let leaf: Node = serde_json::from_str(r#"{ "type": "sine", "freq": 440 }"#).unwrap();
     assert_eq!(leaf.children().count(), 0);
 }
+
+#[test]
+fn wavetable_defaults_and_validates_its_bounds() {
+    // A bare node is valid: `wave` defaults to basic, `position` to 0.
+    let d = doc_with_root(r#"{ "type": "wavetable", "freq": 220 }"#);
+    assert_eq!(d.validate(), Ok(()));
+    let Node::Wavetable { wave, position, .. } = &d.root else {
+        panic!("still a wavetable");
+    };
+    assert_eq!(*wave, WavetableKind::Basic);
+    assert!(matches!(position, Value::Const(c) if *c == 0.0));
+
+    // A constant morph position outside 0..1 is rejected...
+    assert!(
+        doc_with_root(r#"{ "type": "wavetable", "freq": 220, "position": 1.5 }"#)
+            .validate()
+            .unwrap_err()
+            .contains("wavetable.position")
+    );
+    // ...while a modulated one clamps at render time (same policy as duty).
+    assert!(
+        doc_with_root(
+            r#"{ "type": "wavetable", "freq": 220,
+                 "position": { "lfo": { "rate": 1, "depth": 0.5, "center": 0.5 } } }"#
+        )
+        .validate()
+        .is_ok()
+    );
+}
+
+#[test]

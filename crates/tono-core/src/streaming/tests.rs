@@ -124,6 +124,26 @@ fn lfo_modulated_frequency() {
 }
 
 #[test]
+fn wavetable_modulated_position() {
+    // The signature move: an LFO morphing the table position must stream
+    // byte-identically to the offline render.
+    assert_byte_identical(&parse(
+        r#"{ "name":"w", "duration":0.1, "root":
+            { "type":"wavetable", "wave":"basic", "freq":220,
+              "position": { "lfo": { "shape":"sine", "rate":7, "depth":0.5, "center":0.5 } } } }"#,
+    ));
+    // Every other table, with a modulated frequency this time.
+    for wave in ["harmonics", "formant", "metallic"] {
+        assert_byte_identical(&parse(&format!(
+            r#"{{ "name":"w", "duration":0.08, "root":
+                {{ "type":"wavetable", "wave":"{wave}",
+                   "freq": {{ "slide": {{ "from":110, "to":440, "secs":0.07 }} }},
+                   "position": {{ "env": {{ "a":0.01, "d":0.05, "s":0.3, "r":0.02, "from":0, "to":1 }} }} }} }}"#
+        )));
+    }
+}
+
+#[test]
 fn slide_and_arp_modulators() {
     assert_byte_identical(&parse(
         r#"{ "name":"sl", "duration":0.1, "root":

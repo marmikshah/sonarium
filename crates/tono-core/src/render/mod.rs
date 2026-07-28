@@ -12,7 +12,7 @@ mod seq;
 mod tests;
 
 pub(crate) use effects::{FilterKind, biquad_coeffs, drive_antideriv, drive_curve};
-pub(crate) use osc::{osc, poly_blep};
+pub(crate) use osc::{osc, poly_blep, wavetable_frames, wavetable_lookup};
 pub(crate) use seq::seq_to_signal;
 
 use crate::dsl::{Adsr, Node, Playback, Shape, SoundDoc, Value};
@@ -20,7 +20,7 @@ use crate::dsp::{Rng, node_path, node_seed, peak_limit};
 use effects::{biquad, chorus, compress, drive_adaa, flanger, modal_bank, phaser, reverb};
 use osc::{
     dust_signal, fm_signal, impact_signal, noise_signal, osc_signal, saw_signal, square_signal,
-    super_signal, tri_signal,
+    super_signal, tri_signal, wavetable_signal,
 };
 use std::f32::consts::TAU;
 
@@ -170,6 +170,11 @@ fn render_node(node: &Node, n: usize, sr: u32, rng: &mut Rng, engine: u32, path:
             }
         }
         Node::Fm { freq, ratio, index } => fm_signal(freq, *ratio, index, n, sr),
+        Node::Wavetable {
+            wave,
+            freq,
+            position,
+        } => wavetable_signal(*wave, freq, position, n, sr),
         // Engine ≥ 2: the seq draws its voice randomness (noise/pluck/kit/thump)
         // from a structurally-seeded stream, so it's order-independent and the
         // streaming renderer reproduces it byte-identically.

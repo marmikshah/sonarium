@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Added
+- **New `wavetable` node** — a morphing wavetable oscillator with four
+  built-in deterministically generated table sets (`basic`, `harmonics`,
+  `formant`, `metallic`): a modulatable `position` morphs across each set.
+  Table data and lookup are shared by both renderers, so it streams
+  byte-identically — position LFOs and freq slides included.
 - **7 new catalog voices, 5 new presets** — the catalog grows 24 → 31
   voices: `Brass` (section, stab), `Flute` (concert), `Mallets` (marimba,
   vibraphone, glockenspiel), and `Bells` (tubular) on the new seq waves; the
