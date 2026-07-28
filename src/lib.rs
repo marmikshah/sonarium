@@ -18,6 +18,7 @@ pub use tono_core::{
 
 pub mod audio;
 pub mod diff;
+pub mod fit;
 pub mod imaging;
 pub mod midi;
 #[cfg(feature = "play")]

@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Added
+- **`tono fit REF.wav DOC.json`** — target-driven sound design, automated.
+  `tono match` scores a doc against a reference WAV; `tono fit` closes the
+  loop with a deterministic seeded hill-climb over `vary::mutate` — every
+  candidate is a perturbation of the incumbent, kept when the match score
+  improves, with the step size halving after stalled rounds. Writes the best
+  doc (`<doc>.fit.json` or `-o`) and prints its final match table. The search
+  is a pure function of `(reference, doc, rounds, amount, seed)`.
 - **`tono review FILE.json [--archetype KIND]`** — the `review` grader
   (archetype targets + the universal ship checklist) as a CLI subcommand:
   render, grade, and print every finding worst-first with the measured value,

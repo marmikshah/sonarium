@@ -114,6 +114,25 @@ checklist for you** — every finding prints the measured value, the target, and
 the fix to try, and the command exits non-zero on a FAIL grade, so it doubles
 as a ship gate in CI. (The same grading is `tono_core::review` in Rust.)
 
+## Matching a reference sound
+
+Bring a WAV you like and measure a doc against it:
+
+```sh
+tono match REF.wav doc.json      # how far off, metric by metric
+tono fit REF.wav doc.json        # close the gap automatically
+```
+
+`tono match` prints the reference-vs-candidate table (brightness, loudness,
+envelope, duration) with the worst offenders first and an overall score in
+tolerance units. `tono fit` then hill-climbs that score: each round it applies
+a seeded `vary::mutate` perturbation to the incumbent and keeps it when it
+scores closer, halving the step size when the search stalls. The whole search
+is deterministic — same reference, doc, `--rounds`/`--amount`/`--seed`, same
+result — and writes the best doc to `<doc>.fit.json` (or `-o`) along with its
+final match table. Start broad (`--amount 0.4 --rounds 64`), then re-fit the
+output with a small `--amount` to polish.
+
 ## Tips
 - **Punchy/percussive:** `a: 0` (instant attack), short `d`, `s: 0`, add `punch`.
 - **Pitch sweeps:** `slide` with `curve: "exp"` reads as natural pitch glide.
