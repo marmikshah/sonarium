@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### Added
+- **7 new catalog voices, 5 new presets** — the catalog grows 24 → 31
+  voices: `Brass` (section, stab), `Flute` (concert), `Mallets` (marimba,
+  vibraphone, glockenspiel), and `Bells` (tubular) on the new seq waves; the
+  factory presets grow 11 → 16 with `brass_stab`, `flute_lead`, `marimba`,
+  `bell`, and `dark_pad` (the moody counterpart to `supersaw_pad`). All are
+  reachable from `tono catalog` / `tono presets`.
 - **New seq voices: `brass`, `flute`, `mallet`, `bell`** — param-free fixed
   models in the style of `organ`/`strings`/`epiano`: a detuned saw pair
   through an opening lowpass (the horn blat; velocity brightens), a sine with

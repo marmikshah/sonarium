@@ -1,6 +1,6 @@
 //! `tono presets` / `tono catalog` — the factory sounds, from the shell.
 //!
-//! Discovery is docs-only without these: the 11 factory presets and the 24
+//! Discovery is docs-only without these: the 16 factory presets and the 31
 //! catalog voices lived behind `cargo add tono-core` and a Rust file. With no
 //! argument each subcommand lists; with a NAME it renders a short demo —
 //! a preset plays a C-major arpeggio through the live `Instrument` engine
@@ -8,7 +8,10 @@
 //! drum kits) as a tiny `Song` compiled to an ordinary `SoundDoc`.
 
 use anyhow::{Error, Result};
-use tono_core::catalog::{Bass, Drums, ElectricPiano, GrandPiano, Guitar, Organ, Strings, Voice};
+use tono_core::catalog::{
+    Bass, Bells, Brass, Drums, ElectricPiano, Flute, GrandPiano, Guitar, Mallets, Organ, Strings,
+    Voice,
+};
 use tono_core::dsl::{SeqWave, SoundDoc};
 use tono_core::dsp;
 use tono_core::instrument::{Instrument, Note};
@@ -164,6 +167,21 @@ pub static CATALOG: &[CatalogEntry] = &[
         make: Strings::warm,
     },
     CatalogEntry {
+        family: "brass",
+        slug: "section",
+        make: Brass::section,
+    },
+    CatalogEntry {
+        family: "brass",
+        slug: "stab",
+        make: Brass::stab,
+    },
+    CatalogEntry {
+        family: "flute",
+        slug: "concert",
+        make: Flute::concert,
+    },
+    CatalogEntry {
         family: "bass",
         slug: "finger",
         make: Bass::finger,
@@ -197,6 +215,26 @@ pub static CATALOG: &[CatalogEntry] = &[
         family: "guitar",
         slug: "electric",
         make: Guitar::electric,
+    },
+    CatalogEntry {
+        family: "mallets",
+        slug: "marimba",
+        make: Mallets::marimba,
+    },
+    CatalogEntry {
+        family: "mallets",
+        slug: "vibraphone",
+        make: Mallets::vibraphone,
+    },
+    CatalogEntry {
+        family: "mallets",
+        slug: "glockenspiel",
+        make: Mallets::glockenspiel,
+    },
+    CatalogEntry {
+        family: "bells",
+        slug: "tubular",
+        make: Bells::tubular,
     },
     CatalogEntry {
         family: "drums",
@@ -280,7 +318,7 @@ mod tests {
 
     #[test]
     fn catalog_slugs_are_unique_and_build() {
-        assert_eq!(CATALOG.len(), 24, "keep CATALOG in sync with catalog.rs");
+        assert_eq!(CATALOG.len(), 31, "keep CATALOG in sync with catalog.rs");
         for (i, e) in CATALOG.iter().enumerate() {
             assert!(
                 CATALOG.iter().skip(i + 1).all(|o| o.slug != e.slug),
@@ -298,7 +336,8 @@ mod tests {
     fn catalog_list_groups_by_family() {
         let list = catalog_list();
         for family in [
-            "piano", "epiano", "organ", "strings", "bass", "guitar", "drums",
+            "piano", "epiano", "organ", "strings", "brass", "flute", "bass", "guitar", "mallets",
+            "bells", "drums",
         ] {
             assert!(list.lines().any(|l| l.starts_with(family)), "{family}");
         }

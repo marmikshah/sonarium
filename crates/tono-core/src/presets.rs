@@ -75,10 +75,28 @@ pub static PRESETS: &[Preset] = &[
         build: square_lead,
     },
     Preset {
+        name: "brass_stab",
+        category: Category::Lead,
+        description: "Horn-section stab — short and percussive, velocity opens the blat.",
+        build: brass_stab,
+    },
+    Preset {
+        name: "flute_lead",
+        category: Category::Lead,
+        description: "Breathy concert flute — soft attack, velocity is the breath.",
+        build: flute_lead,
+    },
+    Preset {
         name: "supersaw_pad",
         category: Category::Pad,
         description: "Lush wide unison saw pad with a slow swell and reverb.",
         build: supersaw_pad,
+    },
+    Preset {
+        name: "dark_pad",
+        category: Category::Pad,
+        description: "Dark supersaw pad — a low lowpass and slow swell, moody not bright.",
+        build: dark_pad,
     },
     Preset {
         name: "hollow_pad",
@@ -105,10 +123,22 @@ pub static PRESETS: &[Preset] = &[
         build: fm_tine,
     },
     Preset {
+        name: "bell",
+        category: Category::Keys,
+        description: "Struck bell — inharmonic partials ring down, highs first.",
+        build: bell,
+    },
+    Preset {
         name: "pluck",
         category: Category::Pluck,
         description: "Short bright pluck — percussive, lightly detuned.",
         build: pluck,
+    },
+    Preset {
+        name: "marimba",
+        category: Category::Pluck,
+        description: "Wooden marimba — a warm thok with a fast strike, short decay.",
+        build: marimba,
     },
     Preset {
         name: "nylon",
@@ -176,6 +206,36 @@ fn square_lead() -> InstrumentDesign {
     .with_glide(0.05)
 }
 
+fn brass_stab() -> InstrumentDesign {
+    // A single held seq note is the voice; the amp env cuts it short into a
+    // stab, and velocity drives the note gain — the brass model's brightness.
+    InstrumentDesign::new(patch(
+        r#"{ "doc": { "name":"brass_stab", "duration":1.0, "engine":2, "root": { "type":"seq",
+                "bpm":60, "steps_per_beat":1, "wave":"brass",
+                "env": { "a":0.003, "d":0.1, "s":0.0, "r":0.06 },
+                "notes": [ { "step":0, "len":32, "pitch":"C4" } ] } },
+             "params": [
+                { "name":"bite", "paths":["root.notes[0].gain"], "min":0.2, "max":1.0, "default":0.8 } ] }"#,
+    ))
+    .with_amp(adsr(0.003, 0.12, 0.0, 0.08))
+    .with_velocity_param("bite")
+}
+
+fn flute_lead() -> InstrumentDesign {
+    InstrumentDesign::new(patch(
+        r#"{ "doc": { "name":"flute_lead", "duration":1.0, "engine":2, "root": { "type":"seq",
+                "bpm":60, "steps_per_beat":1, "wave":"flute",
+                "env": { "a":0.04, "s":1.0, "r":0.25 },
+                "notes": [ { "step":0, "len":32, "pitch":"C4" } ] } },
+             "params": [
+                { "name":"breath", "paths":["root.notes[0].gain"], "min":0.3, "max":1.0, "default":0.8 } ] }"#,
+    ))
+    .with_amp(adsr(0.04, 0.0, 1.0, 0.25))
+    .with_mode(PlayMode::Mono { legato: true })
+    .with_glide(0.04)
+    .with_velocity_param("breath")
+}
+
 fn supersaw_pad() -> InstrumentDesign {
     InstrumentDesign::new(patch(
         r#"{ "doc": { "name":"supersaw_pad", "duration":1.0, "engine":2, "root": { "type":"chain", "stages": [
@@ -188,6 +248,24 @@ fn supersaw_pad() -> InstrumentDesign {
     .with_unison(7, 30.0, 0.9)
     .with_master(vec![
         serde_json::from_str(r#"{ "type":"reverb", "room":0.7, "mix":0.35 }"#)
+            .expect("factory master must be valid"),
+    ])
+}
+
+fn dark_pad() -> InstrumentDesign {
+    // The same detuned unison as supersaw_pad, but choked by a low lowpass
+    // and swelling slower — the shadow to supersaw_pad's shine.
+    InstrumentDesign::new(patch(
+        r#"{ "doc": { "name":"dark_pad", "duration":1.0, "engine":2, "root": { "type":"chain", "stages": [
+                { "type":"super", "wave":"sawtooth", "freq":220, "voices":7, "detune_cents":30 },
+                { "type":"lowpass", "cutoff":700, "q":0.7 } ] } },
+             "params": [
+                { "name":"pitch",  "paths":["root.stages[0].freq"],   "min":20,  "max":8000, "default":220 },
+                { "name":"cutoff", "paths":["root.stages[1].cutoff"], "min":200, "max":3000, "default":700 } ] }"#,
+    ))
+    .with_amp(adsr(0.9, 0.4, 0.75, 1.2))
+    .with_master(vec![
+        serde_json::from_str(r#"{ "type":"reverb", "room":0.8, "mix":0.35 }"#)
             .expect("factory master must be valid"),
     ])
 }
@@ -249,6 +327,21 @@ fn fm_tine() -> InstrumentDesign {
     .with_velocity_param("bright")
 }
 
+fn bell() -> InstrumentDesign {
+    // The bell model rings on its own (the amp env just leaves the gate
+    // open); a long release lets the hum outlive the key.
+    InstrumentDesign::new(patch(
+        r#"{ "doc": { "name":"bell", "duration":1.0, "engine":2, "root": { "type":"seq",
+                "bpm":60, "steps_per_beat":1, "wave":"bell",
+                "env": { "a":0.001, "s":1.0, "r":2.0 },
+                "notes": [ { "step":0, "len":8, "pitch":"C4" } ] } },
+             "params": [
+                { "name":"hit", "paths":["root.notes[0].gain"], "min":0.3, "max":1.0, "default":0.9 } ] }"#,
+    ))
+    .with_amp(adsr(0.001, 0.0, 1.0, 2.0))
+    .with_velocity_param("hit")
+}
+
 fn pluck() -> InstrumentDesign {
     InstrumentDesign::new(patch(
         r#"{ "doc": { "name":"pluck", "duration":1.0, "engine":2, "root": { "type":"chain", "stages": [
@@ -261,6 +354,21 @@ fn pluck() -> InstrumentDesign {
     .with_amp(adsr(0.001, 0.18, 0.0, 0.12))
     .with_unison(2, 6.0, 0.25)
     .with_velocity_param("cutoff")
+}
+
+fn marimba() -> InstrumentDesign {
+    // A short woody decay on the mallet model; velocity drives the note
+    // gain, which brightens the strike partials.
+    InstrumentDesign::new(patch(
+        r#"{ "doc": { "name":"marimba", "duration":1.0, "engine":2, "root": { "type":"seq",
+                "bpm":60, "steps_per_beat":1, "wave":"mallet",
+                "env": { "a":0.001, "d":0.3, "s":0.0, "r":0.1 },
+                "notes": [ { "step":0, "len":4, "pitch":"C4" } ] } },
+             "params": [
+                { "name":"strike", "paths":["root.notes[0].gain"], "min":0.3, "max":1.0, "default":0.8 } ] }"#,
+    ))
+    .with_amp(adsr(0.001, 0.3, 0.0, 0.1))
+    .with_velocity_param("strike")
 }
 
 fn nylon() -> InstrumentDesign {
@@ -330,7 +438,7 @@ mod tests {
     fn preset_lookup_by_name() {
         assert!(preset("warm_lead").is_some());
         assert!(preset("nope").is_none());
-        assert_eq!(PRESETS.len(), 11);
+        assert_eq!(PRESETS.len(), 16);
     }
 
     #[test]

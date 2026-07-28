@@ -423,6 +423,68 @@ impl Strings {
     }
 }
 
+/// The **brass section** — two detuned band-limited saws through a lowpass
+/// whose cutoff swells open over the first ~70 ms: the "blat" of a horn
+/// attack. Velocity opens the filter further — dig in for a bright stab,
+/// play soft for a mellow swell.
+pub struct Brass;
+
+impl Brass {
+    /// A warm ensemble — sustained horn lines and swells, a touch of hall.
+    pub fn section() -> Voice {
+        voice(
+            "brass section",
+            SeqWave::Brass,
+            Adsr {
+                a: 0.015,
+                d: 0.0,
+                s: 1.0,
+                r: 0.25,
+                punch: 0.0,
+            },
+        )
+        .reverb(0.15)
+    }
+
+    /// Tight horn hits — a percussive envelope that snaps shut, drier than
+    /// the section so stabs stay punchy.
+    pub fn stab() -> Voice {
+        voice(
+            "brass stab",
+            SeqWave::Brass,
+            Adsr {
+                a: 0.003,
+                d: 0.12,
+                s: 0.0,
+                r: 0.08,
+                punch: 0.15,
+            },
+        )
+    }
+}
+
+/// The **concert flute** — a sine with a vibrato that fades in over the first
+/// ~150 ms, over a breath of lowpassed air noise. Velocity adds breath and
+/// edge; write long notes and let `len` shape the phrase.
+pub struct Flute;
+
+impl Flute {
+    /// A breathy sustained flute — soft attack, gentle release.
+    pub fn concert() -> Voice {
+        voice(
+            "concert flute",
+            SeqWave::Flute,
+            Adsr {
+                a: 0.045,
+                d: 0.0,
+                s: 1.0,
+                r: 0.3,
+                punch: 0.0,
+            },
+        )
+    }
+}
+
 /// The **bass** — the low end. Variants trade the voice under the hood.
 pub struct Bass;
 
@@ -600,6 +662,83 @@ fn pluck_env(release: f32) -> Adsr {
     }
 }
 
+/// The **mallets** — struck bars: a warm sine fundamental with fast wooden
+/// strike partials (the "thok" of a mallet hit), or the bright inharmonic
+/// ping of the glockenspiel's bell voice. Velocity brightens the strike.
+pub struct Mallets;
+
+impl Mallets {
+    /// Marimba — short and woody: instant attack, a fast decay to a low
+    /// sustain, a short release. Space the notes.
+    pub fn marimba() -> Voice {
+        voice(
+            "marimba",
+            SeqWave::Mallet,
+            Adsr {
+                a: 0.001,
+                d: 0.25,
+                s: 0.15,
+                r: 0.08,
+                punch: 0.0,
+            },
+        )
+    }
+
+    /// Vibraphone — long ringing: instant attack, full sustain while held, a
+    /// long release that lets the bars shimmer.
+    pub fn vibraphone() -> Voice {
+        voice(
+            "vibraphone",
+            SeqWave::Mallet,
+            Adsr {
+                a: 0.001,
+                d: 0.0,
+                s: 1.0,
+                r: 1.2,
+                punch: 0.0,
+            },
+        )
+    }
+
+    /// Glockenspiel — bright and short: the bell voice under a quick,
+    /// brilliant envelope.
+    pub fn glockenspiel() -> Voice {
+        voice(
+            "glockenspiel",
+            SeqWave::Bell,
+            Adsr {
+                a: 0.001,
+                d: 0.4,
+                s: 0.2,
+                r: 0.3,
+                punch: 0.0,
+            },
+        )
+    }
+}
+
+/// The **bells** — struck inharmonic metal: the partial stack rings down
+/// highs-first, the hum last, with a slow beating shimmer. Long natural
+/// ring — give the notes room.
+pub struct Bells;
+
+impl Bells {
+    /// Tubular bells — a long cathedral ring.
+    pub fn tubular() -> Voice {
+        voice(
+            "tubular bells",
+            SeqWave::Bell,
+            Adsr {
+                a: 0.001,
+                d: 0.0,
+                s: 1.0,
+                r: 2.5,
+                punch: 0.0,
+            },
+        )
+    }
+}
+
 /// The **drum kit** — the General MIDI drum map. Hit drums by name from the
 /// track writer (`.kick()`, `.snare()`, `.hat()`, …) or by GM note.
 pub struct Drums;
@@ -670,6 +809,9 @@ mod tests {
             Organ::rock(),
             Strings::ensemble(),
             Strings::warm(),
+            Brass::section(),
+            Brass::stab(),
+            Flute::concert(),
             Bass::finger(),
             Bass::pick(),
             Bass::sub(),
@@ -677,6 +819,10 @@ mod tests {
             Guitar::nylon(),
             Guitar::steel(),
             Guitar::electric(),
+            Mallets::marimba(),
+            Mallets::vibraphone(),
+            Mallets::glockenspiel(),
+            Bells::tubular(),
             Drums::acoustic(),
             Drums::classic(),
             Drums::electronic(),
@@ -734,6 +880,36 @@ mod tests {
         let s = Guitar::steel().voice.pluck_decay.unwrap();
         let e = Guitar::electric().voice.pluck_decay.unwrap();
         assert!(n < s && s < e, "nylon rings shortest, electric longest");
+    }
+
+    #[test]
+    fn new_waves_have_no_tone_knobs_and_tuned_envelopes() {
+        // The brass/flute/mallet/bell models are param-free: every catalog
+        // voice on them leaves VoiceParams at the default.
+        for v in [
+            Brass::section(),
+            Brass::stab(),
+            Flute::concert(),
+            Mallets::marimba(),
+            Mallets::vibraphone(),
+            Mallets::glockenspiel(),
+            Bells::tubular(),
+        ] {
+            assert_eq!(v.voice, VoiceParams::default(), "{}", v.name);
+        }
+        // The section sustains with a quick-but-not-instant swell; the stab
+        // is percussive and drier.
+        assert_eq!(Brass::section().wave, SeqWave::Brass);
+        assert!(Brass::section().env.a >= 0.01 && Brass::section().env.s == 1.0);
+        assert!(Brass::section().reverb > Brass::stab().reverb);
+        assert_eq!(Brass::stab().env.s, 0.0, "a stab dies fast");
+        // Flute breathes in slowly; mallets/bells strike instantly.
+        assert!(Flute::concert().env.a >= 0.03, "soft flute attack");
+        assert_eq!(Mallets::marimba().wave, SeqWave::Mallet);
+        assert!(Mallets::marimba().env.s < Mallets::vibraphone().env.s);
+        assert!(Bells::tubular().env.r > Mallets::glockenspiel().env.r);
+        assert_eq!(Mallets::glockenspiel().wave, SeqWave::Bell);
+        assert_eq!(Bells::tubular().wave, SeqWave::Bell);
     }
 
     #[test]
