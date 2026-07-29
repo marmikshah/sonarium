@@ -35,6 +35,7 @@
 
 mod engine;
 mod mixer;
+pub mod performance;
 mod ring;
 mod source;
 mod transport;
@@ -47,6 +48,9 @@ pub const SCRATCH_FRAMES: usize = 8192;
 
 pub use engine::{Engine, InstanceHandle, LayerId, ParamId, PatchId, Priority, Tween};
 pub use mixer::{BusId, Mixer, MixerError, SourceId};
+pub use performance::{
+    At, Command, Performance, PerformanceError, PerformanceMetrics, TimestampedCommand,
+};
 pub use ring::{Controller, Pump, Renderer, spsc};
 pub use source::{AudioSource, StreamSource, write_interleaved};
 pub use transport::{Advance, Transport, TransportState};
