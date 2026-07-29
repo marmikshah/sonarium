@@ -89,3 +89,6 @@ cpal = { workspace = true, optional = true }
 
 [features]
 play = ["dep:cpal"]
+
+[dev-dependencies]
+proptest = { workspace = true }
