@@ -235,7 +235,7 @@ impl Program {
     }
 
     /// Render a bar range `[start_bar, end_bar)` through the program's meter
-    /// map (see [`render_range_frames`]).
+    /// map (see [`Self::render_range_frames`]).
     pub fn render_range_bars(&self, start_bar: u32, end_bar: u32) -> (Vec<f32>, Vec<f32>) {
         let transport = crate::runtime::Transport::for_program(&self.meta);
         self.render_range_frames(

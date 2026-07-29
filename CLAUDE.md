@@ -30,16 +30,18 @@ programmatic playground.
 
 ## Workspace layout (one core, several faces)
 
-The root is the `tono` crate (the CLI); the sub-crates live under `crates/`.
+The root is a pure virtual workspace manifest; every package lives under
+`crates/`.
 
 - **`crates/tono-core/`** — the pure engine: the `SoundDoc` graph DSL, DSP,
   deterministic renderer, analysis/critique, graph transforms, the byte-identical
   **streaming** real-time renderer, the **runtime** (`Engine`/`Mixer`/`AudioSource`),
   the **instrument** / **drum-kit** / **adaptive-music** layers, and the **song**
   arrangement layer. No I/O, no transport; pure compute.
-- **`tono` (root crate, `src/`)** — a thin CLI shell: the `tono render` command,
-  audio-file encoders, the analysis image writer, and MIDI export. Depends on and
-  re-exports `tono-core`.
+- **`crates/tono-cli/`** — the `tono` crate (published to crates.io under that
+  name): a thin CLI shell — the `tono render` command, audio-file encoders,
+  the analysis image writer, and MIDI export. Depends on and re-exports
+  `tono-core`.
 - **`crates/tono-desktop/`** — the native desktop studio (Tauri window + `cpal`
   real-time audio + MIDI keyboard input). Excluded from `default-members` and CI;
   built via `make desktop`. Heavy deps (webview/cpal/midir) never touch the default build.
@@ -121,7 +123,7 @@ Before the tag, the release-candidate gates: `make verify` on the pinned
 toolchain plus `stable-compat` green; `cargo doc -p tono-core --no-deps`
 warning-free (the rustdoc gate — keep it at zero); the API compatibility
 review — `cargo public-api diff` against the last tag if the tool is
-installed, otherwise a manual skim of `git diff <last-tag> -- */src/lib.rs
+installed, otherwise a manual skim of `git diff <last-tag> --
 crates/*/src/lib.rs` public items against docs/api-tiers.md (stable surface
 must not break; experimental changes called out in the CHANGELOG); the
 Audit workflow green (licenses + advisories); and the on-demand soak

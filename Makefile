@@ -16,13 +16,13 @@ run: build-release ## Build release and print the CLI usage
 	$(BIN) --help
 
 build: ## Debug build
-	cargo build
+	cargo build -p tono
 
 build-release: ## Optimized release build → target/release/tono
-	cargo build --release
+	cargo build --release -p tono
 
 install: ## Install the `tono` CLI into ~/.cargo/bin
-	cargo install --path .
+	cargo install --path crates/tono-cli
 
 desktop: ## Build the native desktop studio (Tauri + cpal + MIDI) — off the default build; gated by 'make verify-native'
 	cargo build -p tono-desktop --release

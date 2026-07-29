@@ -430,8 +430,8 @@ song host   ──►  <span class="a">runtime</span>: Performance (rung 9) — 
                      └── fill() ──► <span class="a">streaming</span> (rung 5) ──► Speaker / worklet ──► 🔊</code></pre>
 
   <h2>the map</h2>
-  <p>Cargo workspace: the root crate is the CLI; the engine and the faces live under
-  <code>crates/</code>. Everything but the CLI and tono-core is <strong>off the default
+  <p>Cargo workspace: a virtual root manifest; the CLI, the engine and the faces
+  live under <code>crates/</code>. Everything but the CLI and tono-core is <strong>off the default
   build</strong> — <code>make verify</code> compiles only those two; <code>make
   verify-native</code> gates the native faces, <code>make capi</code> / <code>make wasm</code>
   the C ABI and the browser build. Row labels below are the ladder rungs each module group
@@ -442,9 +442,9 @@ song host   ──►  <span class="a">runtime</span>: Performance (rung 9) — 
       <p class="tier-label">Faces — thin shells, each one entry point</p>
       <div class="faces">
         <div class="box">
-          <span class="name">tono <span style="font-weight:400">(root, src/)</span></span>
+          <span class="name">tono <span style="font-weight:400">(crates/tono-cli)</span></span>
           <span class="role">CLI: render + compile → wav/flac/ogg + stems + images + stats; MIDI</span>
-          <span class="run">cargo run -- render f.json</span>
+          <span class="run">cargo run -p tono -- render f.json</span>
         </div>
         <div class="box">
           <span class="name">tono-play</span>
@@ -555,7 +555,7 @@ make hooks         <span class="c"># install pre-commit / pre-push gates once pe
     { "type": "sine", "freq": 880 },
     { "type": "env", "a": 0.002, "d": 0.08, "s": 0.0, "r": 0.05 } ] } }
 EOF
-cargo run -- render blip.json -o out/
+cargo run -p tono -- render blip.json -o out/
 open out/blip.png    <span class="c"># the spectrogram; out/blip.stats.json has the numbers</span></code></pre>
       <p>Then change <code>"freq": 880</code> to <code>"A5"</code>, then to a
       <code>slide</code> modulator, and re-render — you have now used every form of rung 1.</p>
@@ -589,8 +589,8 @@ ls crates/tono-play/examples/        <span class="c"># all eleven</span></code><
     { "step": 8, "len": 4, "pitch": "G2" } ] } ],
   "arrangement": [ { "track": "bass", "pattern": "riff", "bar": 0 } ] }
 EOF
-cargo run -- compile groove.song.json            <span class="c"># writes groove.program.json</span>
-cargo run -- compile groove.song.json --inspect  <span class="c"># pins, hash, estimates, capabilities</span></code></pre>
+cargo run -p tono -- compile groove.song.json            <span class="c"># writes groove.program.json</span>
+cargo run -p tono -- compile groove.song.json --inspect  <span class="c"># pins, hash, estimates, capabilities</span></code></pre>
       <p>Then hear rung 9: <code>make play EXAMPLE=interactive_music</code> runs a Performance —
       sections that switch on the bar, an intensity knob, an on-beat stinger.</p>
     </li>
