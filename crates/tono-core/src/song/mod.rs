@@ -21,9 +21,14 @@
 //! ```
 
 mod compile;
+mod pattern;
 mod phrase;
 
 pub use compile::{CompileOptions, CompileTarget};
+pub use pattern::{
+    PatternError, concat, euclidean, gate, humanize, layer, probability, quantize, repeat, reverse,
+    rotate, slice, stretch, transpose, tuplet, vel,
+};
 pub use phrase::Phrase;
 
 use serde::{Deserialize, Serialize};
