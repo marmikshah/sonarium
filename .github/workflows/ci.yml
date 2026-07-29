@@ -42,4 +42,4 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: Build the WASM face
-        run: cargo build -p tono-wasm --target wasm32-unknown-unknown
+        run: cargo build --locked -p tono-wasm --target wasm32-unknown-unknown
