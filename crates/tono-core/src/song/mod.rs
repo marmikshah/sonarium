@@ -298,6 +298,39 @@ impl Song {
         self
     }
 
+    /// Add a catalog [`Voice`] as a track with an explicit name, writing no
+    /// notes — the constructor the Python typed API uses: naming the track
+    /// explicitly keeps layer ids stable across faces (the fluent
+    /// [`add`](Self::add) path names the track after the instrument's display
+    /// name instead). The name is slugified and deduplicated exactly like
+    /// [`add_track`](Self::add_track), so patterns arrange onto it and it
+    /// becomes the rendered layer id. Notes come from the patterns arranged
+    /// onto the track.
+    ///
+    /// This API is **experimental** through the 1.10.0 alphas
+    /// (docs/api-tiers.md).
+    pub fn add_voice(&mut self, name: impl Into<String>, voice: &Voice) -> &mut Self {
+        let name = self.unique_name(&slugify(&name.into()));
+        self.tracks.push(SongTrack {
+            name,
+            wave: voice.wave,
+            env: voice.env,
+            gain: voice.gain,
+            pan: voice.pan,
+            sf2: String::new(),
+            sf2_preset: 0,
+            sf2_bank: 0,
+            notes: Vec::new(),
+            voice: voice.voice,
+            reverb: voice.reverb,
+            swing: voice.swing,
+            humanize: voice.humanize,
+            mute: false,
+            solo: false,
+        });
+        self
+    }
+
     /// A track name not already taken — appends `_2`, `_3`, … on collision
     /// (keeping it a valid layer-id slug).
     fn unique_name(&self, base: &str) -> String {
@@ -728,6 +761,42 @@ mod tests {
         song.add_track("My Bass", SeqWave::Bass, amp());
         assert_eq!(song.tracks[0].name, "my_bass");
         assert_eq!(song.tracks[1].name, "my_bass_2");
+    }
+
+    #[test]
+    fn add_voice_slugifies_dedups_and_carries_the_voice_fields() {
+        use crate::catalog::{Bass, Drums};
+        let voice = Bass::pick()
+            .gain(0.8)
+            .pan(-0.25)
+            .reverb(0.4)
+            .swing(0.5)
+            .humanize(0.1);
+        let mut song = Song::new("s", 120.0);
+        song.add_voice("My Bass", &voice);
+        song.add_voice("My Bass", &Bass::finger());
+        song.add_voice("drums", &Drums::tr808());
+        assert_eq!(song.tracks[0].name, "my_bass");
+        assert_eq!(song.tracks[1].name, "my_bass_2");
+        assert_eq!(song.tracks[2].name, "drums");
+
+        let t = &song.tracks[0];
+        assert_eq!(t.wave, voice.wave);
+        assert_eq!(t.env, voice.env);
+        assert_eq!(t.gain, 0.8);
+        assert_eq!(t.pan, -0.25);
+        assert_eq!(t.reverb, 0.4);
+        assert_eq!(t.swing, Some(0.5));
+        assert_eq!(t.humanize, Some(0.1));
+        assert_eq!(t.voice, voice.voice, "the pick's bass_* params ride along");
+        assert!(t.notes.is_empty(), "add_voice writes no notes");
+        assert!(t.sf2.is_empty() && t.sf2_preset == 0 && t.sf2_bank == 0);
+        assert!(!t.mute && !t.solo);
+
+        // The explicitly-named track arranges and compiles like any other.
+        song.add_pattern("p", 1, vec![note(0, 2, "C2")]);
+        song.arrange("my_bass", "p", 0);
+        assert!(song.to_doc().is_ok());
     }
 
     #[test]

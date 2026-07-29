@@ -6,6 +6,7 @@ use crate::dsl::{SeqNote, Value};
 /// `.note(..)` / `.chord(..)`), sequential (`.play(..)` / `.rest(..)` advance
 /// the cursor), and drum hits (`.kick()` / `.snare()` / `.hat()` /
 /// `.hit(gm_note)`). Velocity for following notes is set with `.vel(..)`.
+#[derive(Clone)]
 pub struct Phrase {
     steps_per_beat: u32,
     cursor_beat: f32,
@@ -14,13 +15,27 @@ pub struct Phrase {
 }
 
 impl Phrase {
-    pub(super) fn new(steps_per_beat: u32) -> Self {
+    /// An empty phrase on a `steps_per_beat` grid. Besides being the note
+    /// writer [`Song::add`](super::Song::add) hands its closure, this is the
+    /// typed pattern-construction entry point for the binding faces (the
+    /// Python `tono.Pattern` builds its notes through one of these, then hands
+    /// them to [`Song::add_pattern`](super::Song::add_pattern) via
+    /// [`into_notes`](Self::into_notes)). This API is **experimental** through
+    /// the 1.10.0 alphas (docs/api-tiers.md).
+    pub fn new(steps_per_beat: u32) -> Self {
         Phrase {
             steps_per_beat: steps_per_beat.max(1),
             cursor_beat: 0.0,
             velocity: 1.0,
             notes: Vec::new(),
         }
+    }
+
+    /// Consume the phrase and take its written notes — how a binding face
+    /// hands a finished pattern to [`Song::add_pattern`](super::Song::add_pattern).
+    /// Experimental (docs/api-tiers.md).
+    pub fn into_notes(self) -> Vec<SeqNote> {
+        self.notes
     }
 
     fn step_of(&self, beat: f32) -> u32 {
