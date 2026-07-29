@@ -7,6 +7,11 @@
 # A library resolves at the consumer's end, so the lockfile is not committed.
 /Cargo.lock
 
+# Python byproducts: `maturin develop` drops the extension next to the sources
+# (and a stale one there would leak into the wheel), tests write __pycache__.
+__pycache__/
+/crates/tono-py/python/tono/_tono*.so
+
 # Local-only notes kept out of the repo
 /docs/architecture.html
 /docs/ROADMAP.md
