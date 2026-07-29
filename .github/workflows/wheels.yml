@@ -4,11 +4,13 @@ name: Wheels
 # on PRs and master pushes, so a v* tag always points at already-verified
 # code — the 3-platform matrix (10x-cost macOS included) only earns its
 # minutes when a release needs the artifacts. Artifacts only, build-from-source
-# otherwise — the wheels are never published to PyPI.
+# otherwise — the wheels are never published to PyPI. `workflow_dispatch`
+# runs the same builds for pre-tag validation without cutting a release.
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -52,7 +54,39 @@ jobs:
               (sudo apt-get update && sudo apt-get install -y libasound2-dev) \
                 || (apt-get update && apt-get install -y libasound2-dev)
             fi
+      # Every wheel installs and runs on a clean environment — the release
+      # gate for packaging. Import + render a doc, no audio device needed
+      # (numpy is tono's one runtime dependency; install it first).
+      - name: Smoke the wheel on a clean venv
+        run: |
+          python3 -m venv /tmp/tono-wheel-smoke
+          /tmp/tono-wheel-smoke/bin/pip install --quiet numpy
+          /tmp/tono-wheel-smoke/bin/pip install --no-index --find-links dist --force-reinstall --no-deps tono
+          /tmp/tono-wheel-smoke/bin/python crates/tono-py/tests/test_typed.py
+  release-assets:
+    # Checksums for every artifact, and on tags the upload to the GitHub
+    # Release. The wheels carry version metadata by construction (abi3 +
+    # pyproject name/version); the .sha256 sidecars are the hashes (WS8).
+    name: Checksums + release upload
+    needs: wheels
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - name: Checksum every wheel
+        run: |
+          cd dist && for f in *.whl; do sha256sum "$f" > "$f.sha256"; done && ls -la
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.platform.os }}
+          name: wheels-checksums
           path: dist
+      - name: Upload to the GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
