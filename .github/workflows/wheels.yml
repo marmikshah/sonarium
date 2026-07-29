@@ -1,15 +1,17 @@
 name: Wheels
 
-# abi3 wheel builds, RELEASE ONLY: python.yml's smoke test guards correctness
-# on PRs and master pushes, so a v* tag always points at already-verified
-# code — the 3-platform matrix (10x-cost macOS included) only earns its
-# minutes when a release needs the artifacts. Artifacts only, build-from-source
-# otherwise — the wheels are never published to PyPI. `workflow_dispatch`
-# runs the same builds for pre-tag validation without cutting a release.
+# abi3 wheel builds, MANUAL ONLY for now (budget): the 3-platform matrix —
+# especially 10x-cost macOS — is expensive in GitHub Actions minutes, so
+# prebuilt wheels are not generated or released at this time; build from
+# source (`maturin develop` / `pip install .` in crates/tono-py) per the
+# crate README. If users ask for prebuilt wheels, re-enable by reverting
+# the trigger to tags. `workflow_dispatch` keeps the pipeline exercisable
+# (and its clean-venv smoke) on demand, at explicit cost.
+#
+# The pipeline itself is unchanged and validated: matrix builds + a
+# clean-venv smoke per platform + sha256 sidecars + release upload on tags.
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
 
 env:
