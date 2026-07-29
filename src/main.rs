@@ -64,12 +64,12 @@ USAGE:
         feature: cargo install tono --features play).
 
     tono presets [NAME] [-o DIR] [--format wav|flac|ogg]
-        No NAME: list the 11 factory presets. With NAME: render the
+        No NAME: list the 16 factory presets. With NAME: render the
         preset's demo riff (a C-major arpeggio through the live
         Instrument engine) — the same outputs as 'tono render'.
 
     tono catalog [NAME] [-o DIR] [--format wav|flac|ogg]
-        No NAME: list the 24 catalog voices by family. With NAME: render
+        No NAME: list the 31 catalog voices by family. With NAME: render
         the voice's demo — a C-major scale resolving to a chord (a
         two-bar groove for the drum kits).
 
