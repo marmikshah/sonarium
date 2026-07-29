@@ -28,6 +28,5 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
-      - name: Verify
       - run: make ci
 
