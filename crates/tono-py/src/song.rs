@@ -9,15 +9,29 @@
 use std::collections::HashMap;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods};
-use pyo3::exceptions::{PyOSError, PyValueError};
+use pyo3::exceptions::{PyOSError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyType};
 
 use tono_core::catalog::{self, Voice as CoreVoice};
 use tono_core::diag::{CompileError as CoreCompileError, Diagnostic};
-use tono_core::dsl::SeqWave;
+use tono_core::dsl::{AutoCurve, AutoTarget, Bus, Node, Send, SeqWave, TempoPoint};
 use tono_core::program::Program as CoreProgram;
-use tono_core::song::{CompileOptions, CompileTarget, Phrase, Song as CoreSong};
+use tono_core::song::{
+    CompileOptions, CompileTarget, Marker, MeterPoint, Pattern as CorePattern, Phrase, Section,
+    Song as CoreSong, SongLane, SongPoint, SongTrack,
+};
+use tono_core::units::Beat;
+
+/// The typed API's grid: 4 steps per beat (sixteenth notes) — the same
+/// `steps_per_beat` `Song::new` stamps, shared by the pattern write cursor and
+/// every pattern op below.
+const STEPS_PER_BEAT: u32 = 4;
+/// The default meter's beats per bar (`Song::new`'s `beats_per_bar`).
+const BEATS_PER_BAR: u32 = 4;
+/// Steps per bar on that grid — the `steps_per_bar` argument every pattern op
+/// (`repeat`, `concat`, `slice`, `rotate`, `reverse`, `euclidean`) runs on.
+const STEPS_PER_BAR: u32 = STEPS_PER_BEAT * BEATS_PER_BAR;
 
 pyo3::create_exception!(
     tono,
@@ -75,6 +89,239 @@ fn compile_error(py: Python<'_>, err: CoreCompileError) -> PyErr {
         Err(e) => return e,
     }
     pyerr
+}
+
+/// A `(num, den)` pair to a normalized beat, validating the denominator.
+fn beat_from_parts(num: i64, den: i64) -> PyResult<Beat> {
+    if den <= 0 || den > i64::from(u32::MAX) {
+        return Err(PyValueError::new_err(format!(
+            "beat denominator must be in 1..={}, got {den}",
+            u32::MAX
+        )));
+    }
+    Ok(Beat::new(num, den as u32))
+}
+
+/// A float to a beat by its EXACT binary value (mantissa × 2^exponent): 0.5
+/// is exactly 1/2, and float 0.1 is 0.1's binary expansion — NOT 1/10 (pass
+/// `fractions.Fraction` for exact decimals). Values whose exact form doesn't
+/// fit the beat rational (i64/u32) are rejected, pointing at `Fraction`.
+fn beat_from_f64(x: f64) -> PyResult<Beat> {
+    if !x.is_finite() {
+        return Err(PyValueError::new_err(format!(
+            "a beat must be finite, got {x}"
+        )));
+    }
+    if x == 0.0 {
+        return Ok(Beat::zero());
+    }
+    // IEEE-754 double: value = ±mantissa × 2^e2.
+    let bits = x.to_bits();
+    let raw_exp = ((bits >> 52) & 0x7ff) as i32;
+    let frac = bits & ((1u64 << 52) - 1);
+    let (mantissa, e2) = if raw_exp == 0 {
+        (frac, -1074i32) // subnormal: frac × 2^-1074
+    } else {
+        (frac | (1u64 << 52), raw_exp - 1075) // normal: (2^52 | frac) × 2^(exp-1075)
+    };
+    let mut m = mantissa as i64;
+    if bits >> 63 == 1 {
+        m = -m;
+    }
+    // Strip trailing zeros so the denominator stays as small as possible.
+    let tz = m.trailing_zeros();
+    m >>= tz;
+    let e2 = e2 + tz as i32;
+    let inexact = |what: &str| {
+        PyValueError::new_err(format!(
+            "float {x} {what} — pass fractions.Fraction for exact decimals \
+             (e.g. Fraction(1, 10) for 1/10 of a beat)"
+        ))
+    };
+    if e2 >= 0 {
+        if e2 > 62 {
+            return Err(inexact("is too large to represent exactly as a beat"));
+        }
+        let num = i64::try_from((m as i128) << (e2 as u32))
+            .map_err(|_| inexact("is too large to represent exactly as a beat"))?;
+        Ok(Beat::from_int(num))
+    } else {
+        let shift = (-e2) as u32;
+        if shift >= 32 {
+            return Err(inexact("has no exact beat representation"));
+        }
+        Ok(Beat::new(m, 1u32 << shift))
+    }
+}
+
+/// Convert a Python beat position to an exact `units::Beat` — the one
+/// conversion every beat-taking method (`set_tempo_map`, `set_pickup`,
+/// `add_marker`) shares. Accepts an int (whole beats), a float (its EXACT
+/// binary value — see [`beat_from_f64`]), a `fractions.Fraction` (exact
+/// decimals), or a `(num, den)` int tuple. Anything else is a TypeError
+/// naming the accepted forms.
+fn py_beat(obj: &Bound<'_, PyAny>) -> PyResult<Beat> {
+    if let Ok(whole) = obj.extract::<i64>() {
+        return Ok(Beat::from_int(whole));
+    }
+    // fractions.Fraction (duck-typed: integer numerator/denominator) — before
+    // the float arm, since a Fraction's __float__ would round it to a double.
+    if let (Ok(num), Ok(den)) = (
+        obj.getattr("numerator").and_then(|n| n.extract::<i64>()),
+        obj.getattr("denominator").and_then(|d| d.extract::<i64>()),
+    ) {
+        return beat_from_parts(num, den);
+    }
+    if let Ok((num, den)) = obj.extract::<(i64, i64)>() {
+        return beat_from_parts(num, den);
+    }
+    if let Ok(x) = obj.extract::<f64>() {
+        return beat_from_f64(x);
+    }
+    let type_name = obj
+        .get_type()
+        .name()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|_| "?".into());
+    Err(PyTypeError::new_err(format!(
+        "a beat must be an int (whole beats), a float, a fractions.Fraction, or a \
+         (num, den) int tuple — got {type_name:?}"
+    )))
+}
+
+/// The node types valid in a bus insert chain — `dsl::Node::is_processor`'s
+/// set by serde tag, so `add_bus` can reject a non-processor (or unknown)
+/// effect type before serde, with the full accepted list in the message.
+const PROCESSOR_TYPES: &[&str] = &[
+    "lowpass",
+    "highpass",
+    "bandpass",
+    "notch",
+    "peak",
+    "lowshelf",
+    "highshelf",
+    "gain",
+    "bitcrush",
+    "downsample",
+    "delay",
+    "reverb",
+    "modal",
+    "drive",
+    "ringmod",
+    "tremolo",
+    "chorus",
+    "flanger",
+    "phaser",
+    "compress",
+    "duck",
+    "convolve",
+    "granular",
+];
+
+/// A Python value to JSON for effect params: None/bool/int/float/str, and
+/// dicts/lists recursively (a modulator param like `{"type": "lfo", ...}` is
+/// just a nested dict).
+fn py_to_json(obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    if obj.is_none() {
+        return Ok(serde_json::Value::Null);
+    }
+    if let Ok(b) = obj.extract::<bool>() {
+        return Ok(b.into());
+    }
+    if let Ok(i) = obj.extract::<i64>() {
+        return Ok(i.into());
+    }
+    if let Ok(f) = obj.extract::<f64>() {
+        return serde_json::Number::from_f64(f)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| {
+                PyValueError::new_err(format!("non-finite number {f} in effect params"))
+            });
+    }
+    if let Ok(s) = obj.extract::<String>() {
+        return Ok(s.into());
+    }
+    if let Ok(dict) = obj.cast::<PyDict>() {
+        let mut map = serde_json::Map::new();
+        for (k, v) in dict.iter() {
+            map.insert(k.extract::<String>()?, py_to_json(&v)?);
+        }
+        return Ok(serde_json::Value::Object(map));
+    }
+    if let Ok(items) = obj.extract::<Vec<Bound<'_, PyAny>>>() {
+        return Ok(serde_json::Value::Array(
+            items.iter().map(py_to_json).collect::<PyResult<Vec<_>>>()?,
+        ));
+    }
+    let type_name = obj
+        .get_type()
+        .name()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|_| "?".into());
+    Err(PyTypeError::new_err(format!(
+        "unsupported effect param value of type {type_name:?} — use None, bool, int, float, \
+         str, list, or dict"
+    )))
+}
+
+/// Build one bus effect node from a `(type, params)` pair, e.g.
+/// `("reverb", {"room": 0.5, "mix": 0.3})`. Unknown or non-processor types
+/// are ValueErrors naming the accepted processor types; a known type with bad
+/// or unknown params is a ValueError naming the node and its fields.
+fn build_effect(kind: &str, params: &Bound<'_, PyAny>) -> PyResult<Node> {
+    if !PROCESSOR_TYPES.contains(&kind) {
+        return Err(PyValueError::new_err(format!(
+            "unknown effect type {kind:?} — bus effects must be processor nodes, one of: {}",
+            PROCESSOR_TYPES.join(", ")
+        )));
+    }
+    let dict = params.cast::<PyDict>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "effect {kind:?} params must be a dict, e.g. ({kind:?}, {{...}})"
+        ))
+    })?;
+    let mut value = serde_json::Map::new();
+    value.insert("type".into(), kind.into());
+    for (k, v) in dict.iter() {
+        value.insert(k.extract::<String>()?, py_to_json(&v)?);
+    }
+    let node: Node = serde_json::from_value(serde_json::Value::Object(value))
+        .map_err(|e| PyValueError::new_err(format!("effect {kind:?}: {e}")))?;
+    // serde fills missing fields with defaults but would also silently drop an
+    // unknown param — catch that by round-tripping: every given key must
+    // survive the trip through the typed node.
+    let round_trip = serde_json::to_value(&node).expect("a node serializes");
+    let fields = round_trip
+        .as_object()
+        .expect("a node serializes to an object");
+    let unknown: Vec<String> = dict
+        .iter()
+        .filter_map(|(k, _)| k.extract::<String>().ok())
+        .filter(|k| !fields.contains_key(k))
+        .collect();
+    if !unknown.is_empty() {
+        let accepted: Vec<&str> = fields.keys().map(String::as_str).collect();
+        return Err(PyValueError::new_err(format!(
+            "effect {kind:?}: unknown param(s) {} — accepted: {}",
+            unknown.join(", "),
+            accepted.join(", ")
+        )));
+    }
+    Ok(node)
+}
+
+/// Resolve a `Track` handle or a track name string to the name (shared by
+/// `arrange` and `automate`).
+fn track_name_of(track: &Bound<'_, PyAny>) -> PyResult<String> {
+    if let Ok(cell) = track.cast::<Track>() {
+        Ok(cell.borrow().name.clone())
+    } else if let Ok(name) = track.extract::<String>() {
+        Ok(name)
+    } else {
+        Err(PyValueError::new_err(
+            "track must be a Track or a track name string",
+        ))
+    }
 }
 
 /// A catalog instrument voice — what a `Song` track plays. Construct one with
@@ -260,17 +507,44 @@ instrument_fn!(
     "tubular" => catalog::Bells::tubular,
 );
 
-/// A reusable musical phrase, `bars` long, on the song's grid of 4 steps per
-/// beat (sixteenth notes) — songs created through this API keep that default
-/// grid. Notes are placed by beat (floats welcome: beat 0.5 is the second
-/// eighth note) and snap to the grid exactly like the Rust `Phrase` writer.
+/// A reusable musical phrase, `bars` long, on the typed API's grid of 4 steps
+/// per beat / 16 steps per bar (songs created through this API keep that
+/// default grid). Notes are placed by beat (floats welcome: beat 0.5 is the
+/// second eighth note) and snap to the grid exactly like the Rust `Phrase`
+/// writer. The transform methods (`transpose`, `stretch`, `reverse`, …) are
+/// pure: each returns a NEW pattern and never mutates this one.
 #[pyclass(module = "tono")]
 struct Pattern {
-    bars: u32,
+    /// The core pattern (name/bars/notes): the value the ops consume and the
+    /// arrangement registers. `notes` is the source of truth — writes through
+    /// `phrase` are materialized into it after every call.
+    inner: CorePattern,
+    /// The write cursor: `note`/`notes`/`hit`/`chord` place through it (its
+    /// snapping IS the Rust `Phrase` semantics the equivalence hash pins).
     phrase: Phrase,
-    /// The written-note count, for `__repr__` (the phrase keeps its notes
-    /// private; the count is all the repr needs).
-    count: usize,
+    /// How many of `inner.notes`' tail came from `phrase` — the rest is the
+    /// seed an op produced, which later writes must never drop.
+    phrase_notes: usize,
+}
+
+impl Pattern {
+    /// Wrap a finished core pattern (an op's output): notes fixed, a fresh
+    /// write cursor so later writes append after them.
+    fn from_core(inner: CorePattern) -> Self {
+        Pattern {
+            inner,
+            phrase: Phrase::new(STEPS_PER_BEAT),
+            phrase_notes: 0,
+        }
+    }
+
+    /// Re-sync `inner.notes` as `seed notes ++ phrase notes` after a write.
+    fn materialize(&mut self) {
+        let keep = self.inner.notes.len() - self.phrase_notes;
+        self.inner.notes.truncate(keep);
+        self.inner.notes.extend(self.phrase.clone().into_notes());
+        self.phrase_notes = self.inner.notes.len() - keep;
+    }
 }
 
 #[pymethods]
@@ -280,16 +554,55 @@ impl Pattern {
     #[pyo3(signature = (bars=1))]
     fn new(bars: u32) -> Self {
         Pattern {
-            bars: bars.max(1),
-            phrase: Phrase::new(4),
-            count: 0,
+            inner: CorePattern {
+                name: "pattern".into(),
+                bars: bars.max(1),
+                notes: Vec::new(),
+            },
+            phrase: Phrase::new(STEPS_PER_BEAT),
+            phrase_notes: 0,
         }
+    }
+
+    /// `pulses` hits Bresenham-evenly across `steps` grid positions — the
+    /// euclidean-rhythm construction (`euclidean(3, 8, "midi:36")` is the
+    /// tresillo, hits at 0, 3, 6). Every hit gets `pitch` and length `len`
+    /// steps at full velocity. `bars` lengthens the pattern the cycle sits in
+    /// (the result is at least `ceil(steps / 16)` bars — the grid is 16 steps
+    /// per bar). More pulses than steps is a ValueError.
+    #[classmethod]
+    #[pyo3(signature = (pulses, steps, pitch, len=1, bars=1))]
+    fn euclidean(
+        _cls: &Bound<'_, PyType>,
+        pulses: u32,
+        steps: u32,
+        pitch: &str,
+        len: u32,
+        bars: u32,
+    ) -> PyResult<Self> {
+        let mut inner =
+            tono_core::song::euclidean("euclidean", pulses, steps, pitch, len, STEPS_PER_BAR)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        inner.bars = inner.bars.max(bars.max(1));
+        Ok(Pattern::from_core(inner))
+    }
+
+    /// `count` notes spaced evenly across `in_steps` steps — the
+    /// triplet/quintuplet constructor: position `round(i × in_steps / count)`
+    /// (halves away from zero), each `len` steps long at full velocity, in a
+    /// one-bar pattern (`repeat` or `stretch` it to span more).
+    #[classmethod]
+    #[pyo3(signature = (count, in_steps, pitch, len=1))]
+    fn tuplet(_cls: &Bound<'_, PyType>, count: u32, in_steps: u32, pitch: &str, len: u32) -> Self {
+        Pattern::from_core(tono_core::song::tuplet(
+            "tuplet", count, in_steps, pitch, len,
+        ))
     }
 
     /// The pattern's length in bars.
     #[getter]
     fn bars(&self) -> u32 {
-        self.bars
+        self.inner.bars
     }
 
     /// Place a note at beat `at`, `duration` beats long, with velocity `gain`
@@ -298,7 +611,7 @@ impl Pattern {
     #[pyo3(signature = (pitch, at=0.0, duration=1.0, gain=1.0))]
     fn note(&mut self, pitch: &str, at: f32, duration: f32, gain: f32) {
         self.phrase.at(at).vel(gain).note(pitch, duration);
-        self.count += 1;
+        self.materialize();
     }
 
     /// Place `pitches` one after another from the pattern's start (the cursor
@@ -335,7 +648,7 @@ impl Pattern {
         for (pitch, dur) in pitches.iter().zip(durs) {
             self.phrase.play(pitch, dur);
         }
-        self.count += pitches.len();
+        self.materialize();
         Ok(())
     }
 
@@ -360,10 +673,10 @@ impl Pattern {
                 )));
             }
         };
-        self.count += beats.len();
         for b in beats {
             self.phrase.at(b).hit(gm);
         }
+        self.materialize();
         Ok(())
     }
 
@@ -373,20 +686,129 @@ impl Pattern {
     fn chord(&mut self, pitches: Vec<String>, at: f32, duration: f32, gain: f32) {
         let refs: Vec<&str> = pitches.iter().map(String::as_str).collect();
         self.phrase.at(at).vel(gain).chord(&refs, duration);
-        self.count += pitches.len();
+        self.materialize();
+    }
+
+    /// This pattern repeated `times` times end-to-end (`bars × times`), as a
+    /// new pattern. `times` 0 is a deliberate silence.
+    fn repeat(&self, times: u32) -> Pattern {
+        Pattern::from_core(tono_core::song::repeat(&self.inner, STEPS_PER_BAR, times))
+    }
+
+    /// This pattern with `other` appended (`other`'s notes start after this
+    /// one's bars), as a new pattern of `bars + other.bars`.
+    fn concat(&self, other: &Bound<'_, Pattern>) -> Pattern {
+        Pattern::from_core(tono_core::song::concat(
+            &self.inner,
+            &other.borrow().inner,
+            STEPS_PER_BAR,
+        ))
+    }
+
+    /// Both patterns played at once (note sets merged, sorted by step), as a
+    /// new pattern as long as the longer of the two.
+    fn layer(&self, other: &Bound<'_, Pattern>) -> Pattern {
+        Pattern::from_core(tono_core::song::layer(&self.inner, &other.borrow().inner))
+    }
+
+    /// The window `[start, start + len)` in STEPS: notes starting inside are
+    /// kept and re-based to step 0 (tails may overrun), as a new pattern.
+    fn slice(&self, start: u32, len: u32) -> Pattern {
+        Pattern::from_core(tono_core::song::slice(
+            &self.inner,
+            start,
+            len,
+            STEPS_PER_BAR,
+        ))
+    }
+
+    /// Every pitch shifted by `semitones` (negative descends), as a new
+    /// pattern. Note names come back in canonical sharp spelling; `"midi:N"`
+    /// pitches stay `"midi:N"`. An unparseable pitch or a note pushed outside
+    /// the MIDI range is a ValueError.
+    fn transpose(&self, semitones: i16) -> PyResult<Pattern> {
+        tono_core::song::transpose(&self.inner, semitones)
+            .map(Pattern::from_core)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Time scaled by exactly `num/den` (2/1 doubles time, 3/2 is a hemiola),
+    /// as a new pattern. EXACTLY means exactly: any note landing between grid
+    /// steps is a ValueError — nothing is ever rounded silently.
+    fn stretch(&self, num: u32, den: u32) -> PyResult<Pattern> {
+        tono_core::song::stretch(&self.inner, num, den, STEPS_PER_BAR)
+            .map(Pattern::from_core)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Every note's start moved by `shift` steps within the pattern, WRAPPING
+    /// around the end, as a new pattern.
+    fn rotate(&self, shift: i64) -> Pattern {
+        Pattern::from_core(tono_core::song::rotate(&self.inner, shift, STEPS_PER_BAR))
+    }
+
+    /// The pattern mirrored in time, as a new pattern.
+    fn reverse(&self) -> Pattern {
+        Pattern::from_core(tono_core::song::reverse(&self.inner, STEPS_PER_BAR))
+    }
+
+    /// Note starts snapped to the nearest multiple of `grid` steps (halves
+    /// round forward), as a new pattern; lengths are unchanged.
+    fn quantize(&self, grid: u32) -> Pattern {
+        Pattern::from_core(tono_core::song::quantize(&self.inner, grid))
+    }
+
+    /// Every velocity multiplied by `scale` (clamped to 0..1), as a new
+    /// pattern.
+    fn vel(&self, scale: f32) -> Pattern {
+        Pattern::from_core(tono_core::song::vel(&self.inner, scale))
+    }
+
+    /// Every length multiplied by `factor` (a note never vanishes), as a new
+    /// pattern — 0.5 is the classic staccato tighten.
+    fn gate(&self, factor: f32) -> Pattern {
+        Pattern::from_core(tono_core::song::gate(&self.inner, factor))
+    }
+
+    /// Deterministic per-note keep/drop: each note survives when its draw
+    /// falls under `keep` (0..1). Same pattern + same `seed` ⇒ same drops.
+    #[pyo3(signature = (keep, seed=0))]
+    fn probability(&self, keep: f32, seed: u64) -> Pattern {
+        Pattern::from_core(tono_core::song::probability(&self.inner, keep, seed))
+    }
+
+    /// Deterministic per-note jitter BAKED INTO the pattern (structural
+    /// humanization — unlike the song/track `humanize` mix knob): timing
+    /// shifts up to ±`timing` steps, velocity wobbles up to ±`velocity`. Same
+    /// pattern + same `seed` ⇒ same result.
+    #[pyo3(signature = (timing=0.0, velocity=0.0, seed=0))]
+    fn humanize(&self, timing: f32, velocity: f32, seed: u64) -> Pattern {
+        Pattern::from_core(tono_core::song::humanize(
+            &self.inner,
+            timing,
+            velocity,
+            seed,
+        ))
     }
 
     fn __repr__(&self) -> String {
-        format!("Pattern(bars={}, notes={})", self.bars, self.count)
+        format!(
+            "Pattern(bars={}, notes={})",
+            self.inner.bars,
+            self.inner.notes.len()
+        )
     }
 }
 
 /// A handle on one of a song's tracks — returned by `Song.track`. Arranging
 /// onto it arranges onto the final (slugified, deduplicated) track name, which
-/// is also the rendered layer id.
+/// is also the rendered layer id. The routing methods (`route`, `send`, …)
+/// mutate the parent song, which the handle keeps a reference to (one-way —
+/// the song never stores handles, so there is no reference cycle).
 #[pyclass(module = "tono")]
 struct Track {
     name: String,
+    song: Py<Song>,
 }
 
 #[pymethods]
@@ -395,6 +817,60 @@ impl Track {
     #[getter]
     fn name(&self) -> String {
         self.name.clone()
+    }
+
+    /// Route the track's main output to mix bus `bus` (added with
+    /// `Song.add_bus`). An unknown bus name is a ValueError listing the
+    /// song's buses.
+    fn route(&self, py: Python<'_>, bus: &str) -> PyResult<()> {
+        let mut song = self.song.borrow_mut(py);
+        song.require_bus(bus)?;
+        song.track_mut(&self.name).bus = Some(bus.to_string());
+        Ok(())
+    }
+
+    /// Route the track's main output back to the master bus (the default).
+    fn route_master(&self, py: Python<'_>) {
+        self.song.borrow_mut(py).track_mut(&self.name).bus = None;
+    }
+
+    /// Add a post-fader send from this track to `bus` at `amount` (0..1).
+    /// A track sends to a given bus only once — a duplicate target is a
+    /// ValueError (remove it with `clear_sends` first).
+    #[pyo3(signature = (bus, amount=0.5))]
+    fn send(&self, py: Python<'_>, bus: &str, amount: f32) -> PyResult<()> {
+        let mut song = self.song.borrow_mut(py);
+        song.require_bus(bus)?;
+        if !(amount.is_finite() && (0.0..=1.0).contains(&amount)) {
+            return Err(PyValueError::new_err(format!(
+                "send amount must be in [0, 1], got {amount}"
+            )));
+        }
+        let track = song.track_mut(&self.name);
+        if track.sends.iter().any(|s| s.bus == bus) {
+            return Err(PyValueError::new_err(format!(
+                "track '{}' already sends to bus '{bus}' — clear it with clear_sends, or \
+                 adjust the existing send",
+                self.name
+            )));
+        }
+        track.sends.push(Send {
+            bus: bus.to_string(),
+            amount,
+        });
+        Ok(())
+    }
+
+    /// Remove this track's sends: `clear_sends()` removes them all,
+    /// `clear_sends("verb")` only the send to that bus.
+    #[pyo3(signature = (bus=None))]
+    fn clear_sends(&self, py: Python<'_>, bus: Option<&str>) {
+        let mut song = self.song.borrow_mut(py);
+        let track = song.track_mut(&self.name);
+        match bus {
+            None => track.sends.clear(),
+            Some(b) => track.sends.retain(|s| s.bus != b),
+        }
     }
 
     fn __repr__(&self) -> String {
@@ -411,6 +887,36 @@ struct Song {
     /// object: the first `arrange` of a pattern registers it as `pattern_{n}`
     /// and keeps it alive (so its id can't be recycled) for later placements.
     patterns: HashMap<usize, (Py<Pattern>, String)>,
+}
+
+impl Song {
+    /// The song track named `name`, mutably — a `Track` handle's name comes
+    /// from `Song.track`, so a missing name is a bug, not user error.
+    fn track_mut(&mut self, name: &str) -> &mut SongTrack {
+        self.inner
+            .tracks
+            .iter_mut()
+            .find(|t| t.name == name)
+            .expect("a Track handle outlives its song track")
+    }
+
+    /// ValueError unless `bus` names one of the song's buses.
+    fn require_bus(&self, bus: &str) -> PyResult<()> {
+        if self.inner.buses.iter().any(|b| b.id == bus) {
+            return Ok(());
+        }
+        let known: Vec<&str> = self.inner.buses.iter().map(|b| b.id.as_str()).collect();
+        if known.is_empty() {
+            Err(PyValueError::new_err(format!(
+                "unknown bus {bus:?} — the song has no buses yet (add one with add_bus)"
+            )))
+        } else {
+            Err(PyValueError::new_err(format!(
+                "unknown bus {bus:?} — the song's buses are: {}",
+                known.join(", ")
+            )))
+        }
+    }
 }
 
 #[pymethods]
@@ -452,22 +958,29 @@ impl Song {
     /// Add a track playing `voice` under `name` (slugified and deduplicated —
     /// the final name keeps layer ids stable across faces) and return its
     /// `Track` handle. Notes come from the patterns arranged onto it.
-    fn track(&mut self, name: &str, voice: PyRef<'_, Voice>) -> Track {
-        self.inner.add_voice(name, &voice.inner);
-        let final_name = self
-            .inner
-            .tracks
-            .last()
-            .expect("add_voice just pushed a track")
-            .name
-            .clone();
-        Track { name: final_name }
+    fn track(slf: &Bound<'_, Song>, name: &str, voice: PyRef<'_, Voice>) -> Track {
+        let final_name = {
+            let mut song = slf.borrow_mut();
+            song.inner.add_voice(name, &voice.inner);
+            song.inner
+                .tracks
+                .last()
+                .expect("add_voice just pushed a track")
+                .name
+                .clone()
+        };
+        Track {
+            name: final_name,
+            song: slf.clone().unbind(),
+        }
     }
 
     /// Arrange `pattern` onto `track` (a `Track` handle or a track name).
     /// `bars` is an int (place at that one bar) or a range/list of ints
     /// (place at each). The first arrange of a pattern registers it under
-    /// `pattern_{n}` (1-based, in registration order).
+    /// `pattern_{n}` (1-based, in registration order). With a meter map or
+    /// pickup set, a bar that lands between grid steps is a ValueError here
+    /// (rather than a compile error later).
     #[pyo3(signature = (track, pattern, bars=None))]
     fn arrange(
         &mut self,
@@ -475,15 +988,7 @@ impl Song {
         pattern: &Bound<'_, Pattern>,
         bars: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
-        let track_name: String = if let Ok(cell) = track.cast::<Track>() {
-            cell.borrow().name.clone()
-        } else if let Ok(name) = track.extract::<String>() {
-            name
-        } else {
-            return Err(PyValueError::new_err(
-                "track must be a Track or a track name string",
-            ));
-        };
+        let track_name = track_name_of(track)?;
         let bars: Vec<u32> = match bars {
             None => vec![0],
             Some(obj) => {
@@ -499,6 +1004,24 @@ impl Song {
             }
         };
 
+        // With a meter map or pickup, bars move through the exact beat walk —
+        // check every placement lands on the grid BEFORE mutating anything
+        // (the compiler's T1005 catches maps set after the arrange).
+        if !(self.inner.meter_map.is_empty() && self.inner.pickup.is_none()) {
+            let spb = i128::from(self.inner.steps_per_beat.max(1));
+            for &bar in &bars {
+                let beat = self.inner.beat_at_bar(bar);
+                if (beat.num as i128 * spb) % i128::from(beat.den) != 0 {
+                    return Err(PyValueError::new_err(format!(
+                        "bar {bar} lands at beat {beat}, between grid steps ({} steps per \
+                         beat) — raise steps_per_beat, or move the placement/meter change \
+                         onto the grid",
+                        self.inner.steps_per_beat.max(1)
+                    )));
+                }
+            }
+        }
+
         let key = pattern.as_ptr() as usize;
         let registered = match self.patterns.get(&key) {
             Some((_, name)) => name.clone(),
@@ -513,7 +1036,7 @@ impl Song {
                 }
                 let (bars_len, notes) = {
                     let p = pattern.borrow();
-                    (p.bars, p.phrase.clone().into_notes())
+                    (p.inner.bars, p.inner.notes.clone())
                 };
                 self.inner.add_pattern(&name, bars_len, notes);
                 self.patterns
@@ -524,6 +1047,261 @@ impl Song {
         for bar in bars {
             self.inner.arrange(&track_name, &registered, bar);
         }
+        Ok(())
+    }
+
+    /// Set the tempo map: `[(beat, bpm), ...]` — tempo changes at exact beat
+    /// positions (each beat accepts int / float / Fraction / (num, den); a
+    /// float is its EXACT binary value, so 0.1 isn't 1/10 — use Fraction for
+    /// exact decimals). Validated eagerly against the compiler's rules
+    /// (ValueError naming the problem): the first point must sit at beat 0,
+    /// beats strictly ascend, tempos are positive and finite, at most 1024
+    /// points. `set_tempo_map([])` clears the map (constant tempo).
+    fn set_tempo_map(&mut self, points: Vec<(Bound<'_, PyAny>, f32)>) -> PyResult<()> {
+        if points.len() > 1024 {
+            return Err(PyValueError::new_err(format!(
+                "tempo_map is capped at 1024 points, got {}",
+                points.len()
+            )));
+        }
+        let mut map = Vec::with_capacity(points.len());
+        for (i, (beat, bpm)) in points.iter().enumerate() {
+            let at = py_beat(beat)?;
+            if !(bpm.is_finite() && *bpm > 0.0) {
+                return Err(PyValueError::new_err(format!(
+                    "tempo_map[{i}].bpm: tempo must be positive and finite, got {bpm}"
+                )));
+            }
+            map.push(TempoPoint { at, bpm: *bpm });
+        }
+        if let Some(first) = map.first()
+            && first.at != Beat::zero()
+        {
+            return Err(PyValueError::new_err(
+                "tempo_map's first point must be at beat 0 (the song's tempo applies before \
+                 the first change otherwise)",
+            ));
+        }
+        for (i, w) in map.windows(2).enumerate() {
+            if w[1].at <= w[0].at {
+                return Err(PyValueError::new_err(format!(
+                    "tempo_map[{}].at: tempo_map must be strictly ascending by beat",
+                    i + 1
+                )));
+            }
+        }
+        self.inner.tempo_map = map;
+        Ok(())
+    }
+
+    /// Set the meter map: `[(bar, numerator, denominator), ...]` — the time
+    /// signature from each bar on (6/8 is `(bar, 6, 8)`). Validated eagerly
+    /// against the compiler's rules (ValueError naming the problem): the
+    /// first point must be bar 0, bars strictly ascend, numerator ≥ 1,
+    /// denominator a power of two ≤ 64, at most 256 points.
+    /// `set_meter_map([])` clears the map (the song's default 4/4).
+    fn set_meter_map(&mut self, points: Vec<(u32, u32, u32)>) -> PyResult<()> {
+        if points.len() > 256 {
+            return Err(PyValueError::new_err(format!(
+                "meter_map is capped at 256 points, got {}",
+                points.len()
+            )));
+        }
+        for (i, (bar, numerator, denominator)) in points.iter().enumerate() {
+            if *numerator < 1 {
+                return Err(PyValueError::new_err(format!(
+                    "meter_map[{i}].numerator: time-signature numerator must be ≥ 1"
+                )));
+            }
+            if !denominator.is_power_of_two() || *denominator > 64 {
+                return Err(PyValueError::new_err(format!(
+                    "meter_map[{i}].denominator: time-signature denominator must be a \
+                     power of two ≤ 64, got {denominator}"
+                )));
+            }
+            if i > 0 && *bar <= points[i - 1].0 {
+                return Err(PyValueError::new_err(format!(
+                    "meter_map[{i}].bar: meter_map must be strictly ascending by bar"
+                )));
+            }
+        }
+        if let Some(first) = points.first()
+            && first.0 != 0
+        {
+            return Err(PyValueError::new_err(
+                "meter_map's first point must be at bar 0 (add the opening time signature \
+                 at bar 0)",
+            ));
+        }
+        self.inner.meter_map = points
+            .iter()
+            .map(|&(bar, numerator, denominator)| MeterPoint {
+                bar,
+                numerator,
+                denominator,
+            })
+            .collect();
+        Ok(())
+    }
+
+    /// Set the pickup (anacrusis): bar 0's length in beats when it isn't a
+    /// full bar (same beat forms as the tempo map — e.g.
+    /// `set_pickup(Fraction(1, 2))` for an eighth-note pickup in 4/4).
+    /// Negative is a ValueError.
+    fn set_pickup(&mut self, beat: &Bound<'_, PyAny>) -> PyResult<()> {
+        let beat = py_beat(beat)?;
+        if beat < Beat::zero() {
+            return Err(PyValueError::new_err("the pickup bar can't be negative"));
+        }
+        self.inner.pickup = Some(beat);
+        Ok(())
+    }
+
+    /// Clear the pickup — bar 0 is full length again.
+    fn clear_pickup(&mut self) {
+        self.inner.pickup = None;
+    }
+
+    /// Add a named section (`name` starting at `bar`, `bars` long) — musical
+    /// metadata compiled into the Program for the runtime's quantized
+    /// transitions. Empty names and zero-length sections are ValueErrors.
+    fn add_section(&mut self, name: &str, bar: u32, bars: u32) -> PyResult<()> {
+        if name.is_empty() {
+            return Err(PyValueError::new_err(
+                "a section needs a name (e.g. \"verse\", \"chorus\")",
+            ));
+        }
+        if bars < 1 {
+            return Err(PyValueError::new_err("a section must be at least one bar"));
+        }
+        self.inner.sections.push(Section {
+            name: name.to_string(),
+            bar,
+            bars,
+        });
+        Ok(())
+    }
+
+    /// Add a named marker at an exact beat (same beat forms as the tempo
+    /// map) — metadata compiled into the Program. Empty names are ValueErrors.
+    fn add_marker(&mut self, name: &str, beat: &Bound<'_, PyAny>) -> PyResult<()> {
+        if name.is_empty() {
+            return Err(PyValueError::new_err(
+                "a marker needs a name (e.g. \"drop\", \"cue\")",
+            ));
+        }
+        self.inner.markers.push(Marker {
+            name: name.to_string(),
+            at: py_beat(beat)?,
+        });
+        Ok(())
+    }
+
+    /// Add a mix bus: a named submix tracks route to (`Track.route`) and feed
+    /// (`Track.send`), with an insert chain of `effects` — a list of
+    /// `(type, params)` tuples like `("reverb", {"room": 0.5, "mix": 0.3})`.
+    /// The id is a short slug (a-z, 0-9, _), unique and never `"master"`;
+    /// `gain` is the return fader (0..2). Unknown/non-processor effect types
+    /// and unknown params are ValueErrors naming the accepted forms.
+    #[pyo3(signature = (id, gain=1.0, effects=None))]
+    fn add_bus(
+        &mut self,
+        id: &str,
+        gain: f32,
+        effects: Option<Vec<(String, Bound<'_, PyAny>)>>,
+    ) -> PyResult<()> {
+        if id.is_empty()
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        {
+            return Err(PyValueError::new_err(format!(
+                "bus ids are short slugs (a-z, 0-9, _), got '{id}'"
+            )));
+        }
+        if id == "master" {
+            return Err(PyValueError::new_err(
+                "'master' is reserved for the master chain; pick another bus id",
+            ));
+        }
+        if self.inner.buses.iter().any(|b| b.id == id) {
+            return Err(PyValueError::new_err(format!(
+                "duplicate bus id '{id}' — ids must be unique"
+            )));
+        }
+        if self.inner.tracks.iter().any(|t| t.name == id) {
+            return Err(PyValueError::new_err(format!(
+                "bus id '{id}' is also a track name — a track and its bus must be named apart"
+            )));
+        }
+        if !(gain.is_finite() && (0.0..=2.0).contains(&gain)) {
+            return Err(PyValueError::new_err(format!(
+                "bus '{id}': gain must be in [0, 2], got {gain}"
+            )));
+        }
+        let mut chain = Vec::new();
+        for (kind, params) in effects.unwrap_or_default() {
+            chain.push(build_effect(&kind, &params)?);
+        }
+        self.inner.buses.push(Bus {
+            id: id.to_string(),
+            gain,
+            effects: chain,
+        });
+        Ok(())
+    }
+
+    /// Automate a track's `target` (`"gain"` or `"pan"`) with beat-addressed
+    /// breakpoints `[(beat, value), ...]` (floats; compiled to seconds through
+    /// the tempo map). `curve` is `"linear"` (default), `"step"`, or `"exp"`.
+    /// REPLACES any existing lane for that target on the track; the other
+    /// target's lane is kept. An unknown track is a ValueError naming the
+    /// song's tracks.
+    #[pyo3(signature = (track, target, points, curve="linear"))]
+    fn automate(
+        &mut self,
+        track: &Bound<'_, PyAny>,
+        target: &str,
+        points: Vec<(f32, f32)>,
+        curve: &str,
+    ) -> PyResult<()> {
+        let name = track_name_of(track)?;
+        let target = match target {
+            "gain" => AutoTarget::Gain,
+            "pan" => AutoTarget::Pan,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown automation target {other:?} — expected 'gain' or 'pan'"
+                )));
+            }
+        };
+        let curve = match curve {
+            "linear" => AutoCurve::Linear,
+            "step" => AutoCurve::Step,
+            "exp" => AutoCurve::Exp,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown automation curve {other:?} — expected one of: linear, step, exp"
+                )));
+            }
+        };
+        if !self.inner.tracks.iter().any(|t| t.name == name) {
+            let known: Vec<&str> = self.inner.tracks.iter().map(|t| t.name.as_str()).collect();
+            return Err(PyValueError::new_err(format!(
+                "unknown track {name:?} — the song's tracks are: {}",
+                known.join(", ")
+            )));
+        }
+        let track = self.track_mut(&name);
+        track.automation.retain(|lane| lane.target != target);
+        track.automation.push(SongLane {
+            target,
+            curve,
+            points: points
+                .into_iter()
+                .map(|(at, v)| SongPoint { at, v })
+                .collect(),
+        });
         Ok(())
     }
 
