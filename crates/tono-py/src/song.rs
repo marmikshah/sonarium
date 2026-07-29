@@ -1460,6 +1460,44 @@ impl Program {
         py.detach(|| self.inner.render_mono()).into_pyarray(py)
     }
 
+    /// Render a selected range as a stereo `(frames, 2)` float32 array — a
+    /// slice of the full render, so tails crossing the boundary sound
+    /// exactly as in the full mix. Pass `frames=(start, end)` or
+    /// `bars=(start_bar, end_bar)` (through the program's meter map).
+    #[pyo3(signature = (*, frames=None, bars=None))]
+    fn render_range<'py>(
+        &self,
+        py: Python<'py>,
+        frames: Option<(u64, u64)>,
+        bars: Option<(u32, u32)>,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        match (frames, bars) {
+            (Some((s, e)), None) => {
+                let (l, r) = py.detach(|| self.inner.render_range_frames(s, e));
+                let n = l.len();
+                let mut interleaved = Vec::with_capacity(n * 2);
+                for i in 0..n {
+                    interleaved.push(l[i]);
+                    interleaved.push(r[i]);
+                }
+                interleaved.into_pyarray(py).reshape([n, 2])
+            }
+            (None, Some((s, e))) => {
+                let (l, r) = py.detach(|| self.inner.render_range_bars(s, e));
+                let n = l.len();
+                let mut interleaved = Vec::with_capacity(n * 2);
+                for i in 0..n {
+                    interleaved.push(l[i]);
+                    interleaved.push(r[i]);
+                }
+                interleaved.into_pyarray(py).reshape([n, 2])
+            }
+            _ => Err(PyValueError::new_err(
+                "pass exactly one of frames=(start, end) or bars=(start_bar, end_bar)",
+            )),
+        }
+    }
+
     /// Render per-track and per-bus stereo stems (pre-master-chain): a dict
     /// mapping stem id (`"bass"`, `"bus:verb"`) to an `(frames, 2)` float32
     /// array, in declaration order. A stem's `bus` routing is in
