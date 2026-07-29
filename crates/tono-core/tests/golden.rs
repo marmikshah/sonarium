@@ -259,7 +259,7 @@ const CORPUS: &[Case] = &[
         json: r#"{ "name": "wavetable-basic", "duration": 0.25, "version": 2, "engine": 4,
             "root": { "type": "wavetable", "wave": "basic", "freq": 220, "position": 0.5 } }"#,
         mac: (0x41a5677aee1b1037, None),
-        linux: None,
+        linux: Some((0x1287ed13afb3ead8, None)),
     },
     Case {
         name: "wavetable-morph",
@@ -267,7 +267,7 @@ const CORPUS: &[Case] = &[
             "root": { "type": "wavetable", "wave": "harmonics", "freq": 110,
                 "position": { "lfo": { "rate": 2, "depth": 0.5, "center": 0.5 } } } }"#,
         mac: (0xd38f9cd51e44ad24, None),
-        linux: None,
+        linux: Some((0xced37eb5dea735d1, None)),
     },
     Case {
         name: "tremolo-wobble",
@@ -276,7 +276,7 @@ const CORPUS: &[Case] = &[
                 { "type": "sine", "freq": 440 },
                 { "type": "tremolo", "rate": 6, "depth": 0.8 } ] } }"#,
         mac: (0x2fb9fc3269c3669b, None),
-        linux: None,
+        linux: Some((0x9098b89ad7d576b6, None)),
     },
     Case {
         name: "convolve-space",
@@ -287,7 +287,7 @@ const CORPUS: &[Case] = &[
                     { "type": "env", "a": 0.001, "d": 0.02, "s": 0.0, "r": 0.01 } ] },
                 { "type": "convolve", "decay": 0.25, "predelay": 0.01, "damp": 0.5, "mix": 0.45 } ] } }"#,
         mac: (0x3877da20916325a4, None),
-        linux: None,
+        linux: Some((0xaff8051356e767b3, None)),
     },
     Case {
         name: "granular-cloud",
@@ -297,7 +297,7 @@ const CORPUS: &[Case] = &[
                 { "type": "granular", "grain_ms": 40, "density": 25, "pitch": 2.0,
                     "spread": 0.3, "mix": 0.7 } ] } }"#,
         mac: (0x85ac18c492b92392, None),
-        linux: None,
+        linux: Some((0xb91cd059c9dda11f, None)),
     },
     Case {
         // Kick track ducks the sustained bass via a tracks-level sidechain.
@@ -320,7 +320,10 @@ const CORPUS: &[Case] = &[
             0xf152984e8fa7017a,
             Some((0xf152984e8fa7017a, 0xf152984e8fa7017a)),
         ),
-        linux: None,
+        linux: Some((
+            0xce41f23ba0ba3ca2,
+            Some((0xce41f23ba0ba3ca2, 0xce41f23ba0ba3ca2)),
+        )),
     },
     Case {
         name: "seq-brass",
@@ -332,7 +335,7 @@ const CORPUS: &[Case] = &[
                     { "step": 4, "len": 4, "pitch": "E3" },
                     { "step": 8, "len": 6, "pitch": "G3", "gain": 0.85 } ] } }"#,
         mac: (0xe46f21522d9b95a5, None),
-        linux: None,
+        linux: Some((0x9e4ee6a530469f9b, None)),
     },
     Case {
         name: "seq-flute",
@@ -343,7 +346,7 @@ const CORPUS: &[Case] = &[
                     { "step": 0, "len": 8, "pitch": "A4" },
                     { "step": 8, "len": 6, "pitch": "C5", "gain": 0.9 } ] } }"#,
         mac: (0x99b9315441f1a433, None),
-        linux: None,
+        linux: Some((0x59cfce8c3f6f9411, None)),
     },
     Case {
         name: "seq-mallet",
@@ -356,7 +359,7 @@ const CORPUS: &[Case] = &[
                     { "step": 8, "len": 2, "pitch": "G5" },
                     { "step": 12, "len": 4, "pitch": "C6", "gain": 0.85 } ] } }"#,
         mac: (0x289a1a60103010a2, None),
-        linux: None,
+        linux: Some((0x53ac9091cdbb3478, None)),
     },
     Case {
         name: "seq-bell",
@@ -367,7 +370,7 @@ const CORPUS: &[Case] = &[
                     { "step": 0, "len": 8, "pitch": "C4" },
                     { "step": 8, "len": 8, "pitch": "G4", "gain": 0.8 } ] } }"#,
         mac: (0xcc7cf5e7ed38019f, None),
-        linux: None,
+        linux: Some((0x405eda555be5a8d1, None)),
     },
 ];
 
