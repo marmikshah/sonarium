@@ -44,7 +44,11 @@ pub struct Track {
     /// track's signal is loud — the classic kick→bass pump, at mixer level.
     /// The source track renders exactly as it does today; only this (the
     /// follower) track is gain-reduced. None ⇒ the render is byte-identical
-    /// to a document without this field.
+    /// to a document without this field. **Offline only** for now: the
+    /// streaming renderer doesn't stream a `tracks` root, so a sidechained
+    /// mix plays live only through the buffer-backed `Player`/`Engine`
+    /// fallback (a `duck` node inside a streamable graph is the way to pump
+    /// in a natively streamed sound).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidechain: Option<Sidechain>,
 }
