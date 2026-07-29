@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Deprecated
+- **The legacy JSON-string Python API** (`tono.render(doc_json)`,
+  `Patch(json)`, `AdaptiveMusic.add_layer(doc_json)`) — deprecated per
+  docs/api-tiers.md; the typed `tono.Song`/`tono.Program` API is the
+  successor. It keeps working through v1.10.
+
 ### Fixed
 - **Two contract violations found by the new proptest suite**, each pinned by
   a regression test: a tracks automation lane with exactly one point whose
@@ -11,8 +17,50 @@
   overflowed parameters validated without an upper bound (modal decay, filter
   q, ADSR times, …) to ±inf, breaking its still-valid promise — the jitter
   now clamps to `[min, f32::MAX]`.
+- **A latent hang in the threaded SPSC test** — the pump/drain soak could
+  spin forever under load (a full-block drain guard vs. a non-multiple
+  tail); it now drains the exact tail once the producer is finished.
 
 ### Added
+- **`Song::compile() -> Program` — the immutable compiled artifact**
+  (experimental through the 1.10.0 alphas). One validation pass collects
+  every problem — unknown track/pattern references with their exact paths,
+  a resolved document that fails validation — each a structured diagnostic
+  with a stable code, severity, path, message, and fix. The returned
+  Program carries the resolved document, the musical metadata a transport
+  needs (tempo, grid, bars, duration in seconds and frames, a track roster
+  with stable declaration-order ids), bounded resource estimates (frames,
+  events, peak voices, memory), streaming blockers as warnings, and a
+  canonical content hash (FNV-1a over sorted-key JSON) that an equivalent
+  song reproduces from Rust or Python. Programs serialize as versioned
+  bundles (`PROGRAM_VERSION` 1, independent of the schema/engine pins);
+  loading rejects a newer revision and re-verifies the hash — never
+  recompiles. Architecture decisions and the stable/experimental/internal
+  API tiers are recorded in `docs/adr/` and `docs/api-tiers.md`.
+- **Exact musical time + typed units + stable ids + structured
+  diagnostics** — `Beat`, an exact rational musical position (tuplets and
+  repeated transforms never drift), with `beat_to_frames` the single,
+  specified crossing to audio frames (halves round away from zero);
+  `Frames`/`Samples`/`SampleRate`/`Hertz`/`Decibels`/`Tempo`/`Bars`
+  newtypes; `TrackId`/`PatternId`/`PlacementId`/`ParamId`/`BusId`; the
+  `Diagnostic`/`CompileError` types behind `Song::compile`.
+- **Song-level `seed` and track `mute`/`solo`** — a song's seed stamps the
+  compiled document (same song + same seed ⇒ same artifact); solo follows
+  console semantics (every non-solo track mutes; a muted solo stays muted).
+  Additive: songs without the new fields compile byte-identically.
+- **The typed Python API** (experimental): `tono.Song` / `Pattern` /
+  `Track` / `Program` and the `tono.instruments` catalog wrap the native
+  Rust model — no JSON in the build→compile→render path, the GIL released
+  for compile and render, structured `tono.CompileError` exceptions with
+  `.diagnostics`, and documented NumPy buffers (stereo `(frames, 2)`
+  float32 owned copies). The package ships `py.typed` and complete stubs;
+  a cross-language fixture pins that the reference song compiles to the
+  same hash from Python and Rust.
+- **`tono compile SONG.json [-o FILE] [--sample-rate N] [--inspect]`** —
+  compile a song to a Program bundle from the shell; `--inspect` prints
+  the machine-readable summary (hash, version pins, roster, estimates,
+  warnings) and writes nothing. A failing compile exits non-zero, so it
+  doubles as a CI gate for song projects.
 - **Criterion benchmarks + proptest validation fuzzing** — `make bench`
   runs five criterion benches over the render hot path (osc/env, a tracks
   mix, a piano seq, an FX chain, streaming fill), and the report-only

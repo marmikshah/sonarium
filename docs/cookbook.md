@@ -310,6 +310,38 @@ Layer them: `fm` melody + soft `triangle` doubling + `pluck` arpeggio is a
 full band. The pluck's noise burst comes from the doc's `seed`, so takes are
 reproducible.
 
+## Songs — from a composition to a Program
+
+A whole piece is a **Song**: instrument tracks, reusable patterns, and an
+arrangement on the bar grid (the `song` module in Rust, `tono.Song` in
+Python — the same model, the same output). Compiling a song with
+`Song::compile` produces a **Program**: the resolved document plus everything
+a host needs — a canonical content **hash** (identical from Rust or Python
+for an equivalent song), the musical facts (tempo, grid, bars, duration in
+seconds and frames, the track roster with stable ids), bounded **resource
+estimates** (frames, note events, peak voices, memory), and **streaming
+warnings** (a compiled song is a `tracks` root, which plays live through the
+buffer-backed `Player` until the runtime streams tracks).
+
+Compilation validates in one pass — every problem at once, each with a
+stable code, the object path, and the fix:
+
+```sh
+tono compile night_drive.json --inspect
+```
+
+prints the machine-readable summary (hash, version pins, roster, estimates,
+warnings) and writes nothing; without `--inspect` it writes
+`<name>.program.json` — a versioned bundle that `Program::from_json` /
+`tono.Program.load` reloads without recompiling (a newer bundle revision is
+rejected, a hand-edited one fails its hash check). A failing compile exits
+non-zero, so `tono compile` doubles as a CI gate for song projects.
+
+Songs carry their own `engine`/`version` pins like documents, plus an
+optional song-level `seed`; tracks can be `mute`d or `solo`ed (console
+semantics: solo mutes every non-solo track). All of it lands in the Program,
+so a saved bundle reproduces its audio exactly.
+
 ## More timbres
 
 - **PWM lead:** `square` with a modulated `duty` — `{ "lfo": { "shape": "sine", "rate": 5, "depth": 0.3, "center": 0.5 } }`.

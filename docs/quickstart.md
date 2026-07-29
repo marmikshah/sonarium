@@ -68,6 +68,44 @@ tono render blip.json -o out/ --watch
 Leave it running, edit the JSON in your editor, and every save re-renders with
 fresh images and stats. Ctrl-C to stop.
 
+## 5. A whole song from Python (5 minutes)
+
+The typed Python API composes full music — no JSON, and the deterministic
+guarantee is the same: an equivalent song compiles to the same canonical
+hash from Python or Rust.
+
+```sh
+pip install tono  # or maturin develop in crates/tono-py
+```
+
+```python
+import tono
+
+song = tono.Song("night-drive", tempo=122)
+
+drums = song.track("drums", tono.instruments.drums("tr808"))
+bass = song.track("bass", tono.instruments.bass("finger"))
+
+beat = tono.Pattern(bars=1)
+beat.hit("kick", beats=[0, 2])
+beat.hit("snare", beats=[1, 3])
+beat.hit("hat", beats=[0.5, 1.5, 2.5, 3.5])
+
+riff = tono.Pattern(bars=1)
+riff.notes(["C2", "C2", "Eb2", "G2"], durations=0.5)
+
+song.arrange(drums, beat, bars=range(4))
+song.arrange(bass, riff, bars=range(4))
+
+program = song.compile(sample_rate=48_000)
+print(hex(program.hash), program.estimates)
+audio = program.render()          # float32, shape (frames, 2), L/R
+program.save("night-drive.program.json")
+```
+
+A compile that fails raises `tono.CompileError` with `.diagnostics` — every
+problem in one pass, each with a stable code, the object path, and the fix.
+
 ## Where next?
 
 - **Make sounds (SFX, UI, impacts)** — the [cookbook](cookbook.md): the full
