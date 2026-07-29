@@ -93,6 +93,13 @@ pub struct SongTrack {
     /// bpm). Empty = the static `gain`/`pan` apply — byte-identical.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub automation: Vec<SongLane>,
+    /// The mix bus this track routes to (a name from the song's `buses`).
+    /// None = the master bus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus: Option<String>,
+    /// Post-fader sends into the song's mix buses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sends: Vec<crate::dsl::Send>,
 }
 
 /// One automation lane on a song track: `target` driven by beat-addressed
@@ -220,6 +227,10 @@ pub struct Song {
     /// Named points on the timeline — metadata compiled into the Program.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub markers: Vec<Marker>,
+    /// Mix buses: named submixes with insert chains (e.g. a shared reverb).
+    /// Tracks route to them with their `bus` field and feed them with `sends`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub buses: Vec<crate::dsl::Bus>,
     /// The instrument tracks.
     pub tracks: Vec<SongTrack>,
     /// The reusable phrases.
@@ -315,6 +326,7 @@ impl Song {
             pickup: None,
             sections: Vec::new(),
             markers: Vec::new(),
+            buses: Vec::new(),
             tracks: Vec::new(),
             patterns: Vec::new(),
             arrangement: Vec::new(),
@@ -355,6 +367,8 @@ impl Song {
             mute: false,
             solo: false,
             automation: Vec::new(),
+            bus: None,
+            sends: Vec::new(),
         });
         self
     }
@@ -392,6 +406,8 @@ impl Song {
             mute: false,
             solo: false,
             automation: Vec::new(),
+            bus: None,
+            sends: Vec::new(),
         });
         self
     }
@@ -426,6 +442,8 @@ impl Song {
             mute: false,
             solo: false,
             automation: Vec::new(),
+            bus: None,
+            sends: Vec::new(),
         });
         self
     }

@@ -653,6 +653,58 @@ fn validate_rejects_bad_sidechain_wiring() {
 }
 
 #[test]
+fn validate_rejects_bad_bus_wiring() {
+    let mk = |buses: &str, tracks: &str| {
+        doc(&format!(
+            r#"{{ "name":"t", "duration":1.0, "version":2, "root":{{ "type":"tracks",
+                "buses":{buses}, "tracks":{tracks} }} }}"#
+        ))
+    };
+    let good = mk(
+        r#"[ { "id":"verb", "gain":0.8, "effects":[ { "type":"reverb", "room":0.5 } ] } ]"#,
+        r#"[ { "id":"a", "node":{ "type":"sine", "freq":440 }, "bus":"verb",
+              "sends":[ { "bus":"verb", "amount":0.4 } ] } ]"#,
+    );
+    assert!(good.validate().is_ok(), "{:?}", good.validate());
+    // Unknown bus on a route, unknown bus / bad amount / duplicate on sends.
+    for tracks in [
+        r#"[ { "id":"a", "node":{ "type":"sine", "freq":440 }, "bus":"ghost" } ]"#,
+        r#"[ { "id":"a", "node":{ "type":"sine", "freq":440 },
+              "sends":[ { "bus":"ghost", "amount":0.5 } ] } ]"#,
+        r#"[ { "id":"a", "node":{ "type":"sine", "freq":440 },
+              "sends":[ { "bus":"verb", "amount":1.5 } ] } ]"#,
+        r#"[ { "id":"a", "node":{ "type":"sine", "freq":440 },
+              "sends":[ { "bus":"verb", "amount":0.3 }, { "bus":"verb", "amount":0.2 } ] } ]"#,
+    ] {
+        let d = mk(
+            r#"[ { "id":"verb", "effects":[ { "type":"reverb", "room":0.5 } ] } ]"#,
+            tracks,
+        );
+        assert!(d.validate().is_err(), "{tracks} should be rejected");
+    }
+    // Duplicate bus ids, a bus/track name collision, a source on the insert
+    // chain, and 'master' as a bus id are all rejected.
+    for (buses, why) in [
+        (
+            r#"[ { "id":"verb" }, { "id":"verb" } ]"#,
+            "duplicate bus id",
+        ),
+        (r#"[ { "id":"a" } ]"#, "bus id collides with a layer id"),
+        (
+            r#"[ { "id":"verb", "effects":[ { "type":"sine", "freq":440 } ] } ]"#,
+            "a source on the insert chain",
+        ),
+        (r#"[ { "id":"master" } ]"#, "'master' is reserved"),
+    ] {
+        let d = mk(
+            buses,
+            r#"[ { "id":"a", "node":{ "type":"sine", "freq":440 } } ]"#,
+        );
+        assert!(d.validate().is_err(), "{why}: should be rejected");
+    }
+}
+
+#[test]
 fn validate_bounds_convolve_params() {
     let mk = |extra: &str| {
         doc(&format!(

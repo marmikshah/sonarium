@@ -239,6 +239,7 @@ impl Song {
         let root = Node::Tracks {
             tracks: doc_tracks,
             master: self.master.clone(),
+            buses: self.buses.clone(),
         };
         // The song's pinned engine/version win over the current ones, so a
         // saved project replays byte-identically across kernel upgrades.
@@ -368,6 +369,8 @@ impl Song {
                 .map(|lane| self.compile_lane(lane))
                 .collect(),
             sidechain: None,
+            bus: t.bus.clone(),
+            sends: t.sends.clone(),
         })
     }
 
@@ -1235,5 +1238,35 @@ mod tests {
             tracks[0].automation[0].points[1].t, 3.0,
             "the lane crosses the tempo map segment-wise"
         );
+    }
+
+    #[test]
+    fn buses_and_sends_pass_through_to_the_document() {
+        let mut song = demo_song();
+        song.buses.push(crate::dsl::Bus {
+            id: "verb".into(),
+            gain: 0.8,
+            effects: vec![Node::Reverb {
+                room: 0.6,
+                mix: 0.4,
+            }],
+        });
+        song.tracks[1].bus = Some("verb".into());
+        song.tracks[0].sends.push(crate::dsl::Send {
+            bus: "verb".into(),
+            amount: 0.3,
+        });
+        let program = song.compile(&CompileOptions::default()).unwrap();
+        let Node::Tracks { tracks, buses, .. } = &program.doc.root else {
+            panic!("tracks root");
+        };
+        assert_eq!(buses.len(), 1);
+        assert_eq!(buses[0].id, "verb");
+        assert_eq!(tracks[1].bus.as_deref(), Some("verb"));
+        assert_eq!(tracks[0].sends.len(), 1);
+        assert_eq!(tracks[0].sends[0].bus, "verb");
+        assert!(program.doc.validate().is_ok(), "the wired mix validates");
+        // And the mix renders (the send leaves a reverb tail).
+        assert!(!program.render_mono().is_empty());
     }
 }

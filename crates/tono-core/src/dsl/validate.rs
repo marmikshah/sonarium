@@ -142,7 +142,12 @@ impl SoundDoc {
             }
             non_negative("playback.loop.crossfade_secs", crossfade_secs)?;
         }
-        if let Node::Tracks { tracks, master } = &self.root {
+        if let Node::Tracks {
+            tracks,
+            master,
+            buses,
+        } = &self.root
+        {
             if tracks.is_empty() {
                 return Err("tracks must be non-empty".into());
             }
@@ -312,6 +317,90 @@ impl SoundDoc {
                     ));
                 }
                 validate_node(m)?;
+            }
+            // Bus wiring: ids are unique slugs that can't collide with a
+            // layer id or the master stream; effects are processors like the
+            // master chain; routing references must name real buses.
+            let mut seen_bus_ids = std::collections::HashSet::new();
+            for b in buses {
+                if b.id.is_empty()
+                    || !b
+                        .id
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                {
+                    return Err(format!(
+                        "bus ids are short slugs (a-z, 0-9, _), got '{}'",
+                        b.id
+                    ));
+                }
+                if b.id == "master" {
+                    return Err(
+                        "'master' is reserved for the master chain; pick another bus id".into(),
+                    );
+                }
+                if !seen_bus_ids.insert(b.id.clone()) {
+                    return Err(format!("duplicate bus id '{}' — ids must be unique", b.id));
+                }
+                if seen_ids.contains(&b.id) {
+                    return Err(format!(
+                        "bus id '{}' is also a layer id — a track and its bus must be named apart",
+                        b.id
+                    ));
+                }
+                if !(0.0..=2.0).contains(&b.gain) {
+                    return Err(format!(
+                        "bus '{}': gain must be in [0, 2], got {}",
+                        b.id, b.gain
+                    ));
+                }
+                for (i, fx) in b.effects.iter().enumerate() {
+                    if !fx.is_processor() {
+                        return Err(format!(
+                            "bus '{}' effects[{i}] must be a processor (filter/eq/dynamics/fx)",
+                            b.id
+                        ));
+                    }
+                    if contains_tracks(fx) {
+                        return Err(format!("bus '{}' effects cannot nest tracks", b.id));
+                    }
+                    validate_node(fx)?;
+                }
+            }
+            for (i, t) in tracks.iter().enumerate() {
+                let who = match &t.id {
+                    Some(id) => format!("layer '{id}'"),
+                    None => format!("tracks[{i}]"),
+                };
+                if let Some(bus) = &t.bus
+                    && !buses.iter().any(|b| &b.id == bus)
+                {
+                    return Err(format!(
+                        "{who}: routed to bus '{bus}', which is not a bus in this document"
+                    ));
+                }
+                let mut seen_sends: Vec<&str> = Vec::new();
+                for s in &t.sends {
+                    if !(0.0..=1.0).contains(&s.amount) {
+                        return Err(format!(
+                            "{who}: send to '{}' must have amount in [0, 1], got {}",
+                            s.bus, s.amount
+                        ));
+                    }
+                    if !buses.iter().any(|b| b.id == s.bus) {
+                        return Err(format!(
+                            "{who}: sends to bus '{}', which is not a bus in this document",
+                            s.bus
+                        ));
+                    }
+                    if seen_sends.contains(&s.bus.as_str()) {
+                        return Err(format!(
+                            "{who}: duplicate send to bus '{}' — raise one send's amount instead",
+                            s.bus
+                        ));
+                    }
+                    seen_sends.push(&s.bus);
+                }
             }
             return Ok(());
         }

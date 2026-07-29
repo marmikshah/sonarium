@@ -407,6 +407,27 @@ const CORPUS: &[Case] = &[
         ),
         linux: None,
     },
+    Case {
+        // Bus routing: a pad routed to a reverb bus, a kick sent to it.
+        name: "tracks-bus-mix",
+        json: r#"{ "name": "tracks-bus-mix", "duration": 1.0, "seed": 6, "version": 2, "engine": 4,
+            "root": { "type": "tracks",
+                "buses": [ { "id": "verb", "gain": 0.8, "effects": [
+                    { "type": "reverb", "room": 0.5, "mix": 0.6 } ] } ],
+                "tracks": [
+                    { "id": "kick", "node": { "type": "seq", "bpm": 240, "wave": "kit", "kit": "808",
+                        "env": { "a": 0.001, "d": 0.1, "s": 0.5, "r": 0.1 },
+                        "notes": [ { "step": 0, "len": 1, "pitch": "midi:36" } ] },
+                      "sends": [ { "bus": "verb", "amount": 0.3 } ] },
+                    { "id": "pad", "node": { "type": "sawtooth", "freq": 110 }, "gain": 0.4,
+                      "pan": 0.3, "bus": "verb" }
+                ] } }"#,
+        mac: (
+            0x9be3ed8b32bcf69f,
+            Some((0x90a3cdf1747ca6c6, 0x577c2b180bd35620)),
+        ),
+        linux: None,
+    },
 ];
 
 /// Song fluent path golden: the arrangement layer compiles through `to_doc`
