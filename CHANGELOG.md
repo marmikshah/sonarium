@@ -15,8 +15,10 @@
 ### Added
 - **Criterion benchmarks + proptest validation fuzzing** — `make bench`
   runs five criterion benches over the render hot path (osc/env, a tracks
-  mix, a piano seq, an FX chain, streaming fill), so a perf regression can't
-  ride in silently next to a correct refactor. `tests/fuzz_validation.rs`
+  mix, a piano seq, an FX chain, streaming fill), and the report-only
+  `Bench` CI workflow runs them on core-touching PRs and publishes the
+  numbers (no gate: shared runners are too noisy for a hard threshold, so a
+  regression is made visible rather than blocked). `tests/fuzz_validation.rs`
   property-tests the crate contract: parse/validate never panics, a validated
   doc renders finite samples, an unvalidated (poisoned) doc still can't panic
   the renderer, and `mutate` always re-validates.
