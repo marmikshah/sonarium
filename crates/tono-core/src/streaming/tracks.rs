@@ -235,7 +235,7 @@ impl StreamTracks {
                 pan: t.pan,
                 gain_lane: LaneCursor::build(&t.automation, AutoTarget::Gain, t.gain),
                 pan_lane: LaneCursor::build(&t.automation, AutoTarget::Pan, t.pan),
-                dest: t.bus.as_deref().and_then(&bus_index),
+                dest: t.bus.as_deref().and_then(bus_index),
                 sends: t
                     .sends
                     .iter()

@@ -11,7 +11,8 @@ env:
 jobs:
   build-test:
     # Both pinned golden-corpus platforms: the per-platform render hashes
-    # (macos-aarch64 vs linux-x86_64) must each be CI-validated.
+    # (macos-aarch64 vs linux-x86_64) must each be CI-validated. The pinned
+    # production toolchain comes from rust-toolchain.toml (1.88.0).
     strategy:
       fail-fast: false
       matrix:
@@ -19,12 +20,26 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify
+        # The one gate — identical to the pre-push hook and `make verify`.
+        run: make verify
+
+  stable-compat:
+    # The future, tested separately from the pinned production toolchain:
+    # latest stable, so an upstream regression or a stabilization we rely on
+    # surfaces early instead of on release day. RUSTUP_TOOLCHAIN overrides
+    # the rust-toolchain.toml pin for this job only.
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Verify
-        # The one gate — identical to the pre-push hook and `make verify`.
+      - name: Verify on latest stable
         run: make verify
 
   build-wasm:
