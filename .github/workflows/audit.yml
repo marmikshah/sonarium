@@ -1,0 +1,28 @@
+name: Audit
+
+# Supply-chain checks (issue #52, WS9): dependency licenses against
+# deny.toml's allowlist and the RustSec advisory database against the
+# committed lockfile. Runs on lockfile changes and nightly; also manual.
+# Findings are release blockers, not per-commit gates.
+
+on:
+  push:
+    branches: [master]
+    paths: ["Cargo.lock", "deny.toml", ".github/workflows/audit.yml"]
+  pull_request:
+    paths: ["Cargo.lock", "deny.toml", ".github/workflows/audit.yml"]
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses
