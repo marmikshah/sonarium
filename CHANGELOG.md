@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Deferred
+- **Opus export** — evaluated for alpha.2 and deferred to the portability
+  slice (1.10.0-beta.1): a production Opus encoder means binding libopus
+  (a system dependency with its own versioning — the wrong thing to gate
+  the composition slice on). WAV, FLAC, and OGG Vorbis remain the
+  deterministic export formats; the decision is recorded here so the
+  roadmap's "codecs" line has an explicit answer.
+
 ### Deprecated
 - **The legacy JSON-string Python API** (`tono.render(doc_json)`,
   `Patch(json)`, `AdaptiveMusic.add_layer(doc_json)`) — deprecated per
@@ -22,6 +30,65 @@
   tail); it now drains the exact tail once the producer is finished.
 
 ### Added
+- **The streaming mixer** (alpha.3): schema-v2 `tracks` roots now stream
+  natively, byte-identical to the offline bounce at any block size — every
+  track's graph, per-sample pan/gain with automation lanes (linear/step/exp),
+  sidechain duck envelopes, bus routing and post-fader sends, bus insert
+  chains with decorrelated reverb, and the master chain, with the peak-limit
+  gain probed at load. `StreamGraph::blockers` now reports unstreamable
+  parts with context (`track 'pad'`, `bus 'verb'`, `the master chain` + the
+  node-level cause); still blocked, with the report saying so: `normalize`,
+  `loop` playback, stereo treatments, sampler tracks, and schema-v1 roots.
+  A streamable compiled song now comes back from `Song::compile` with no
+  streaming warnings.
+- **Tempo and meter maps, pickup, sections, markers** (alpha.2, experimental):
+  tempo changes at exact rational beat positions applied segment-wise (a
+  note crossing one keeps its musical length; placement rounds halves away
+  from zero; swing/humanize follow the local tempo); time-signature maps
+  with numerator AND denominator (6/8 = 3 quarter-beats) plus
+  pickup/anacrusis; named sections and markers preserved into the Program
+  for the runtime's quantized transitions. Everything validates with
+  stable codes (T1003–T1006), a placement between grid steps is a loud
+  error, and songs without maps compile byte-identically. The sampler
+  keeps its constant-tempo path (validation rejects a map there).
+- **The `music` module** — harmony vocabulary (experimental): `Pitch`,
+  `PitchClass`, `Interval`, `Scale`, `Key`, `Chord`, `Voicing` with one
+  strict spelling grammar shared with the DSL and no silent guessing —
+  "H4", "C", "CM", "C sus4" are loud errors. Transposition is
+  bounds-checked; chords invert and arpeggiate; voicings give close,
+  drop-2 open, and slash-bass spacings.
+- **Pattern and rhythm operations** (experimental): pure transforms on
+  song patterns — repeat/concat/layer/slice/transpose/stretch/rotate/
+  reverse/quantize, `vel`/`gate` scaling, Euclidean and tuplet
+  constructors, and deterministic `probability`/`humanize` per
+  (pattern, seed). Exact or loud: off-grid stretch errors name the note;
+  transpose preserves `midi:N` form so a kit stays a kit.
+- **Automation curves and beat-addressed lanes** — track automation gains
+  `step` (hold then jump) and `exp` (geometric between positive
+  endpoints, linear fallback) curves; omitted = linear, byte-identical.
+  Song automation is addressed in beats and compiled through the tempo
+  map segment-wise.
+- **Mixer buses, inserts, sends, and returns** — a tracks root gains
+  named `buses` with insert chains and return faders; tracks route with
+  `bus` and feed post-fader/post-duck copies with `sends`. Bus inserts
+  run with id-keyed streams and decorrelated reverb tails; returns land
+  on the master bus ahead of the master chain. Additive: no buses =
+  the legacy mix, bit-for-bit. Songs carry `buses` plus per-track
+  `bus`/`sends`.
+- **Stems** — `render_stems` decomposes a mix into every track's
+  positioned stereo contribution (pre bus/master; muted tracks silent)
+  plus every bus's processed return, each carrying its routing:
+  master-routed stems plus bus returns sum to exactly the mix the master
+  chain hears. `tono render --stems DIR` writes stereo WAVs per stem;
+  `Program.render_stems()` returns a dict of arrays with `stem_routing`.
+- **MIDI through Song** — `tono import FILE.mid --song` writes a Song
+  (one track per MIDI track, notes direct, first tempo event sets bpm);
+  `tono midi SONG.json --song` exports through `to_doc`.
+- **The alpha.2 Python surface** — all of the above in the typed API:
+  tempo/meter maps and pickup (exact-rational beats via int/Fraction/
+  (num, den)), sections/markers, buses with typed effect inserts,
+  track routing, automation, pattern ops as `Pattern` methods, and
+  `Pitch`/`Key`/`Chord` harmony wrappers — all validating eagerly.
 - **`Song::compile() -> Program` — the immutable compiled artifact**
   (experimental through the 1.10.0 alphas). One validation pass collects
   every problem — unknown track/pattern references with their exact paths,
@@ -89,10 +156,8 @@
   level, byte-for-byte the `duck` node's envelope math). Validation rejects
   unknown sources, self-follows, and follower-of-follower chains; a muted
   source ducks nothing; `amount: 0` and absent fields render bit-identically
-  to before. Deterministic regardless of declaration order. Offline-only for
-  now, like every `tracks` root: live playback goes through the
-  buffer-backed `Player`/`Engine` fallback until the runtime mixer streams
-  tracks (a `duck` node remains the way to pump in a streamed graph).
+  to before. Deterministic regardless of declaration order. Schema-v2
+  sidechained mixes stream natively (see the streaming-mixer entry).
 - **New `wavetable` node** — a morphing wavetable oscillator with four
   built-in deterministically generated table sets (`basic`, `harmonics`,
   `formant`, `metallic`): a modulatable `position` morphs across each set.
