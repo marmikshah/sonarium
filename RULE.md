@@ -1,4 +1,6 @@
-# tono — repo guide
+# RULE — the one contributor surface
+
+**Less is more. Explicit is always better than implicit.**
 
 A deterministic synthesis-graph engine that renders audio and feeds back
 analysis (a spectrogram + waveform + numeric stats), so a sound can be authored
@@ -16,7 +18,7 @@ programmatic playground.
 - **Docs are split by audience.** User-facing text (README, docs/, crate
   READMEs, example headers) answers with cargo/maturin/pip commands and
   runnable examples — the `Makefile` is the *contributor* interface and its
-  targets appear only here (CLAUDE.md) and in the architecture guide.
+  targets appear only here (RULE.md) and in the architecture guide.
 - **There is never a 2.0.** Breaking changes land in ordinary 1.x minors, and
   deprecated surface is removed directly in the next minor — no long-lived
   deprecation shims. The byte-identity promise below is a product guarantee,
@@ -86,14 +88,16 @@ renders forever.
 
 ## Build / test
 
-- `make verify` — exactly what CI runs: `fmt --check` + clippy (`-D warnings`) +
-  tests. The pre-push hook runs this. `make check` is the mutating version.
+- `make ci` — the portable CI gate: `pre-commit-checks` + `test`. The pre-push
+  hook runs this, so a pushed head has already proven hosted CI locally.
+- `make verify` — the same gate by its older name (`fmt --check` + clippy
+  (`-D warnings`) + tests). `make check` is the mutating version.
 - `make pre-commit-checks` — the lint gate (fmt + clippy) alone.
 - `make verify-native` — the gate for the off-CI crates: touching tono-desktop /
   tono-play / tono-py? This is your gate — plain `make verify` does not compile
   them (they are non-default workspace members). CI runs it via the Native
   workflow when those crates change.
-- `make desktop` / `make play` — the native faces (heavy deps, off the default build).
+- `make desktop` — the native desktop studio (heavy deps, off the default build).
 - `make capi` / `make wasm` — the C ABI and the browser face (off the default
   build; wasm32 builds are also gated by the `build-wasm` job in CI).
 - `make hooks` — install the git hooks (`.githooks/pre-commit`, `pre-push`).
@@ -114,12 +118,13 @@ Wheels workflow comment):
 3. Confirm `cargo publish --dry-run -p tono-core` passes. The `-p tono`
    dry-run only resolves once `tono-core` X.Y.Z is on crates.io, so it runs
    after step 4, not before.
-4. `make release` (tags `vX.Y.Z`, pushes; CI publishes `tono-core` then
-   `tono`, creates the GitHub Release, and builds the tag's CLI binaries.
-   Wheels: manual-only via the Wheels workflow's `workflow_dispatch`, at
-   explicit CI cost — see its header comment.)
+4. Tag and push directly (no wrapper): from a clean master,
+   `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`. CI publishes
+   `tono-core` then `tono`, creates the GitHub Release, and builds the
+   tag's CLI binaries. Wheels: manual-only via the Wheels workflow's
+   `workflow_dispatch`, at explicit CI cost — see its header comment.
 
-Before the tag, the release-candidate gates: `make verify` on the pinned
+Before the tag, the release-candidate gates: `make ci` on the pinned
 toolchain plus `stable-compat` green; `cargo doc -p tono-core --no-deps`
 warning-free (the rustdoc gate — keep it at zero); the API compatibility
 review — `cargo public-api diff` against the last tag if the tool is

@@ -16,14 +16,6 @@ on:
       - "crates/tono-core/**"
       - ".github/workflows/native.yml"
       - "Makefile"
-  pull_request:
-    paths:
-      - "crates/tono-desktop/**"
-      - "crates/tono-play/**"
-      - "crates/tono-py/**"
-      - "crates/tono-core/**"
-      - ".github/workflows/native.yml"
-      - "Makefile"
 
 env:
   CARGO_TERM_COLOR: always

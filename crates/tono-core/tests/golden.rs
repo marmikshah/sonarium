@@ -629,7 +629,7 @@ fn serde_roundtrip_preserves_the_render() {
 
 #[test]
 fn example_recipes_replay_byte_identically() {
-    // CLAUDE.md promises the docs/examples recipes replay in CI — enforce it.
+    // RULE.md promises the docs/examples recipes replay in CI — enforce it.
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/examples/");
     for (file, mac, linux) in [
         ("blip.json", 0x412f073451d5a804u64, 0x736497864af55267u64),

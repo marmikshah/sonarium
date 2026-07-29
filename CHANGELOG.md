@@ -33,6 +33,17 @@ move existing work forward.
   project — the pipeline stays validated but manual-only
   (`workflow_dispatch`), and the crate README says so plainly. Prebuilt
   wheels come back if users ask for them.
+- **House structure and contributor contract aligned.** The CLI package
+  moved to `crates/tono-cli` (the root is a pure virtual workspace
+  manifest; the `tono` crate name and publish path are unchanged), and the
+  repo follows the portfolio contributor standard: `RULE.md` is the one
+  rule surface (the core principle: *Less is more. Explicit is always
+  better than implicit.* — CLAUDE.md is retired into it), `make ci` is the
+  one portable gate the pre-push hook and hosted CI both run, PR CI is a
+  single draft-gated job (heavier faces validate on master pushes), and
+  two findings ride as dated, reviewable exemptions in `.repo-policy.toml`
+  (the committed lockfile — required for reproducible shipped-binary
+  builds — and the Python tests living with their package).
 
 ### Deferred
 - **Opus export** — evaluated for alpha.2 and deferred to the portability

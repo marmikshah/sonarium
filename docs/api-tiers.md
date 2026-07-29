@@ -12,7 +12,7 @@ output, the render/streaming entry points, the catalog voices, and the
 CLI's command surface.
 
 - Follows SemVer on the 1.x line: **no breaking changes, ever** — there is
-  no 2.0 to hide them in (see CLAUDE.md's versioning note).
+  no 2.0 to hide them in (see RULE.md's versioning note).
 - Evolution is additive: new nodes, voices, fields with defaults, new
   subcommands. Documents and songs pinned at older schema/engine revisions
   keep their exact historical behavior; compatibility is carried by the
