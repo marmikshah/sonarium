@@ -36,7 +36,8 @@
 //! transitions, stingers).
 //!
 //! Composing: [`song`] (tracks/patterns/arrangement, compiles to a plain
-//! `SoundDoc`) · [`catalog`] + [`presets`] (ready-made voices).
+//! `SoundDoc`) · [`music`] (pitches, intervals, scales, keys, chords) ·
+//! [`catalog`] + [`presets`] (ready-made voices).
 //!
 //! Feedback: [`analysis`] (stats + spectrogram/waveform images) · [`review`]
 //! (grade a sound against its archetype).
@@ -69,6 +70,7 @@ pub mod dsp;
 pub mod edit;
 pub mod ids;
 pub mod instrument;
+pub mod music;
 pub mod patch;
 pub mod player;
 pub mod presets;
@@ -95,6 +97,7 @@ pub mod prelude {
     pub use crate::diag::{CompileError, Diagnostic, Severity};
     pub use crate::dsl::{Adsr, ENGINE_VERSION, Node, SeqNote, SeqWave, SoundDoc, Value};
     pub use crate::instrument::{Instrument, InstrumentDesign, Note};
+    pub use crate::music::{Chord, Interval, Key, Pitch, PitchClass, Scale};
     pub use crate::patch::Patch;
     pub use crate::program::{Program, ProgramMeta, ResourceEstimates};
     pub use crate::render::{RenderProduct, render, render_product};
