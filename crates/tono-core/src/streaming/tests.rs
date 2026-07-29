@@ -277,6 +277,372 @@ fn tremolo_streams_byte_identically() {
     assert_byte_identical(&d);
 }
 
+// ---- tracks root (schema-v2 mixer) ----
+
+/// Assert a schema-v2 `tracks` doc streams byte-for-byte identical to the
+/// offline mixer — the stereo bus, peak-limit gain included — in one block
+/// and split across several block sizes. The gain is the runtime's
+/// StreamSource probe mechanism: one throwaway pass of the same graph
+/// measures the joint peak the offline output stage limited against.
+fn assert_tracks_byte_identical(doc: &SoundDoc) {
+    let product = crate::render::render_product(doc);
+    let (el, er) = product.stereo.expect("a tracks doc renders stereo");
+    let n = el.len();
+    let gain = {
+        let mut probe = StreamGraph::try_from_doc(doc).expect("should stream");
+        let (mut l, mut r) = (vec![0.0f32; n], vec![0.0f32; n]);
+        probe.fill_stereo(&mut l, &mut r);
+        let peak = l.iter().chain(r.iter()).fold(0.0f32, |m, x| m.max(x.abs()));
+        if peak > crate::dsp::CEIL {
+            crate::dsp::CEIL / peak
+        } else {
+            1.0
+        }
+    };
+    for bs in [n.max(1), 1, 7, 64, 333] {
+        let mut sg = StreamGraph::try_from_doc(doc).unwrap();
+        let (mut gl, mut gr) = (Vec::with_capacity(n), Vec::with_capacity(n));
+        while gl.len() < n {
+            let take = bs.min(n - gl.len());
+            let (mut bl, mut br) = (vec![0.0f32; take], vec![0.0f32; take]);
+            sg.fill_stereo(&mut bl, &mut br);
+            gl.extend(bl);
+            gr.extend(br);
+        }
+        let scaled = |v: &[f32]| v.iter().map(|x| x * gain).collect::<Vec<_>>();
+        assert_eq!(bits(&scaled(&gl)), bits(&el), "left, block size {bs}");
+        assert_eq!(bits(&scaled(&gr)), bits(&er), "right, block size {bs}");
+    }
+}
+
+#[test]
+fn tracks_mix_streams_byte_identically() {
+    // The full console in one document: kit + saw + super + a tempo-mapped
+    // seq, linear/step/exp automation lanes, a kick→bass sidechain, one bus
+    // with inserts plus a send, and a master chain with a reverb (the 0/23
+    // decorrelated pair) into a compressor. Hot faders, so the joint peak
+    // limit bites and the probe gain is exercised too.
+    assert_tracks_byte_identical(&parse(
+        r#"{ "name":"mix", "duration":1.0, "seed":11, "version":2, "engine":4,
+            "root": { "type":"tracks",
+              "buses": [ { "id":"verb", "gain":0.8, "effects": [
+                  { "type":"reverb", "room":0.6, "mix":0.5 },
+                  { "type":"lowpass", "cutoff":3200, "q":0.7 } ] } ],
+              "tracks": [
+                { "id":"kick", "node": { "type":"seq", "bpm":120, "steps_per_beat":4, "wave":"kit",
+                    "env": { "a":0.001, "d":0.08, "s":0.0, "r":0.04 },
+                    "notes": [ { "step":0, "len":1, "pitch":"midi:36" },
+                               { "step":4, "len":1, "pitch":"midi:36" },
+                               { "step":8, "len":1, "pitch":"midi:38" },
+                               { "step":12, "len":1, "pitch":"midi:36" } ] },
+                  "gain":0.9 },
+                { "id":"bass", "node": { "type":"chain", "stages": [
+                      { "type":"sawtooth", "freq":55 },
+                      { "type":"lowpass", "cutoff":400, "q":0.8 } ] },
+                  "gain":0.6, "at":0.013,
+                  "automation": [ { "target":"gain", "curve":"linear", "points": [
+                      { "t":0.0, "v":0.2 }, { "t":0.7, "v":0.9 }, { "t":1.0, "v":0.4 } ] } ],
+                  "sidechain": { "source":"kick", "amount":0.75, "attack":0.004, "release":0.12 } },
+                { "id":"pad", "node": { "type":"super", "wave":"sawtooth", "freq":220,
+                      "voices":5, "detune_cents":14 },
+                  "gain":0.3, "at":0.11, "pan":-0.4,
+                  "automation": [
+                    { "target":"gain", "curve":"exp", "points": [
+                        { "t":0.05, "v":0.1 }, { "t":0.8, "v":0.5 } ] },
+                    { "target":"pan", "curve":"step", "points": [
+                        { "t":0.0, "v":-0.6 }, { "t":0.3, "v":0.0 }, { "t":0.6, "v":0.6 } ] } ],
+                  "sends": [ { "bus":"verb", "amount":0.6 } ] },
+                { "id":"arp", "node": { "type":"seq", "bpm":120, "steps_per_beat":4, "wave":"square",
+                    "tempo_map": [ { "at":{"num":0,"den":1}, "bpm":120 },
+                                   { "at":{"num":2,"den":1}, "bpm":90 } ],
+                    "env": { "a":0.004, "d":0.05, "s":0.4, "r":0.06 },
+                    "notes": [ { "step":0, "len":2, "pitch":"C4" },
+                               { "step":2, "len":2, "pitch":"E4" },
+                               { "step":4, "len":2, "pitch":"G4" },
+                               { "step":6, "len":2, "pitch":"C5" } ] },
+                  "gain":0.25, "pan":0.5, "at":0.007 }
+              ],
+              "master": [
+                { "type":"reverb", "room":0.35, "mix":0.18 },
+                { "type":"compress", "threshold":-12, "ratio":2.5,
+                  "attack":0.006, "release":0.09, "makeup":1.5 } ] } }"#,
+    ));
+}
+
+#[test]
+fn tracks_at_offsets_stream_byte_identically() {
+    // The `at` matrix: tracks landing at different song positions (including
+    // after lanes have started moving) must reproduce the offline's
+    // render-then-shift exactly, at every block size.
+    for at in [(0.0, 0.013, 0.11), (0.21, 0.0, 0.047), (0.5, 0.5, 0.0)] {
+        let doc = parse(&format!(
+            r#"{{ "name":"offs", "duration":0.6, "seed":5, "version":2, "engine":3,
+                "root": {{ "type":"tracks", "tracks": [
+                    {{ "id":"hiss", "node": {{ "type":"noise", "color":"pink" }},
+                      "gain":0.4, "at":{} }},
+                    {{ "id":"tone", "node": {{ "type":"triangle", "freq":330 }},
+                      "gain":0.5, "at":{},
+                      "automation": [ {{ "target":"pan", "curve":"linear", "points": [
+                          {{ "t":0.0, "v":-0.8 }}, {{ "t":0.6, "v":0.8 }} ] }} ] }},
+                    {{ "id":"blip", "node": {{ "type":"chain", "stages": [
+                          {{ "type":"square", "freq":880 }},
+                          {{ "type":"bitcrush", "bits":6 }} ] }},
+                      "gain":0.3, "at":{} }}
+                ] }} }}"#,
+            at.0, at.1, at.2
+        ));
+        assert_tracks_byte_identical(&doc);
+    }
+}
+
+#[test]
+fn tracks_muted_and_muted_source_stream_byte_identically() {
+    // v2 muted tracks contribute exact zeros and draw nothing; a muted
+    // sidechain source leaves the follower's envelope fully open; a missing
+    // source (unvalidated doc) means no ducking — all exactly as the offline.
+    assert_tracks_byte_identical(&parse(
+        r#"{ "name":"mut", "duration":0.5, "seed":7, "version":2, "engine":3,
+            "root": { "type":"tracks", "tracks": [
+                { "id":"kick", "node": { "type":"seq", "bpm":160, "steps_per_beat":4, "wave":"kit",
+                    "env": { "a":0.001, "d":0.08, "s":0.0, "r":0.04 },
+                    "notes": [ { "step":0, "len":1, "pitch":"midi:36" },
+                               { "step":4, "len":1, "pitch":"midi:36" } ] },
+                  "gain":0.8 },
+                { "id":"bass", "node": { "type":"sawtooth", "freq":55 }, "gain":0.5, "mute":true,
+                  "sidechain": { "source":"kick", "amount":0.8, "attack":0.005, "release":0.1 } },
+                { "id":"ghost", "node": { "type":"noise", "color":"white" }, "mute":true },
+                { "id":"pad", "node": { "type":"sine", "freq":440 }, "gain":0.4, "pan":-0.3,
+                  "sidechain": { "source":"ghost", "amount":0.8, "attack":0.005, "release":0.1 } },
+                { "id":"lead", "node": { "type":"square", "freq":660 }, "gain":0.3, "pan":0.4,
+                  "sidechain": { "source":"nobody", "amount":0.8, "attack":0.005, "release":0.1 } }
+            ] } }"#,
+    ));
+}
+
+#[test]
+fn tracks_golden_shapes_stream_byte_identically() {
+    // The three mixer shapes the golden suite pins offline: a sidechain, the
+    // automation curves, and bus routing — the stream must match them too.
+    assert_tracks_byte_identical(&parse(
+        r#"{ "name": "tracks-sidechain", "duration": 1.0, "seed": 6, "version": 2, "engine": 4,
+            "root": { "type": "tracks", "tracks": [
+                { "id": "kick", "node": { "type": "seq", "bpm": 240, "wave": "kit", "kit": "808",
+                    "env": { "a": 0.001, "d": 0.1, "s": 0.5, "r": 0.1 },
+                    "notes": [
+                        { "step": 0, "len": 1, "pitch": "midi:36" },
+                        { "step": 4, "len": 1, "pitch": "midi:36" },
+                        { "step": 8, "len": 1, "pitch": "midi:36" },
+                        { "step": 12, "len": 1, "pitch": "midi:36" } ] } },
+                { "id": "bass", "node": { "type": "seq", "bpm": 240, "wave": "sawtooth",
+                    "env": { "a": 0.005, "d": 0.05, "s": 0.8, "r": 0.05 },
+                    "notes": [ { "step": 0, "len": 16, "pitch": "C2" } ] },
+                  "sidechain": { "source": "kick", "amount": 0.8, "attack": 0.005, "release": 0.15 } }
+            ] } }"#,
+    ));
+    assert_tracks_byte_identical(&parse(
+        r#"{ "name": "tracks-automation-curves", "duration": 1.0, "seed": 9, "version": 2, "engine": 4,
+            "root": { "type": "tracks", "tracks": [
+                { "id": "pad", "node": { "type": "sawtooth", "freq": 220 }, "gain": 0.5,
+                  "automation": [
+                    { "target": "gain", "curve": "exp", "points": [
+                        { "t": 0.0, "v": 0.2 }, { "t": 0.6, "v": 0.9 } ] },
+                    { "target": "pan", "curve": "step", "points": [
+                        { "t": 0.0, "v": -0.5 }, { "t": 0.5, "v": 0.5 } ] }
+                  ] }
+            ] } }"#,
+    ));
+    assert_tracks_byte_identical(&parse(
+        r#"{ "name": "tracks-bus-mix", "duration": 1.0, "seed": 6, "version": 2, "engine": 4,
+            "root": { "type": "tracks",
+                "buses": [ { "id": "verb", "gain": 0.8, "effects": [
+                    { "type": "reverb", "room": 0.5, "mix": 0.6 } ] } ],
+                "tracks": [
+                    { "id": "kick", "node": { "type": "seq", "bpm": 240, "wave": "kit", "kit": "808",
+                        "env": { "a": 0.001, "d": 0.1, "s": 0.5, "r": 0.1 },
+                        "notes": [ { "step": 0, "len": 1, "pitch": "midi:36" } ] },
+                      "sends": [ { "bus": "verb", "amount": 0.3 } ] },
+                    { "id": "pad", "node": { "type": "sawtooth", "freq": 110 }, "gain": 0.4,
+                      "pan": 0.3, "bus": "verb" }
+                ] } }"#,
+    ));
+}
+
+#[test]
+fn tracks_master_chain_with_duck_and_delay_streams_byte_identically() {
+    // Non-reverb bus/master inserts run as per-channel pairs built on the
+    // bus/master stream path — a duck's trigger (structurally seeded there)
+    // must fire identically on both channels and in the stream.
+    assert_tracks_byte_identical(&parse(
+        r#"{ "name":"md", "duration":0.4, "seed":2, "version":2, "engine":3,
+            "root": { "type":"tracks",
+              "tracks": [
+                { "id":"a", "node": { "type":"sawtooth", "freq":110 }, "gain":0.5, "pan":-0.5 },
+                { "id":"b", "node": { "type":"noise", "color":"brown" }, "gain":0.3, "pan":0.6,
+                  "bus":"fx" }
+              ],
+              "buses": [ { "id":"fx", "gain":1.1, "effects": [
+                  { "type":"delay", "secs":0.02, "feedback":0.35 },
+                  { "type":"duck", "amount":0.6, "attack":0.004, "release":0.06,
+                    "trigger": { "type":"noise", "color":"white" } } ] } ],
+              "master": [
+                  { "type":"delay", "secs":0.011, "feedback":0.25 },
+                  { "type":"duck", "amount":0.5, "attack":0.003, "release":0.05,
+                    "trigger": { "type":"seq", "bpm":200, "steps_per_beat":4, "wave":"kit",
+                        "env": { "a":0.001, "d":0.06, "s":0.0, "r":0.03 },
+                        "notes": [ { "step":0, "len":1, "pitch":"midi:36" },
+                                   { "step":2, "len":1, "pitch":"midi:36" } ] } } ] } }"#,
+    ));
+}
+
+#[test]
+fn tracks_mono_fill_is_the_mid() {
+    // The mono view of a streamed mixer is its mid — what render_product
+    // hands mono consumers.
+    let doc = parse(
+        r#"{ "name":"mid", "duration":0.2, "seed":4, "version":2, "engine":3,
+            "root": { "type":"tracks", "tracks": [
+                { "id":"l", "node": { "type":"sine", "freq":220 }, "pan":-0.7, "gain":0.5 },
+                { "id":"r", "node": { "type":"sine", "freq":330 }, "pan":0.7, "gain":0.5 } ] } }"#,
+    );
+    let product = crate::render::render_product(&doc);
+    let mut sg = StreamGraph::try_from_doc(&doc).unwrap();
+    let mut got = vec![0.0f32; product.mono.len()];
+    sg.fill(&mut got);
+    // The mono mid precedes the peak limit; scale by the probe gain like the
+    // stereo helper does (this doc is quiet — gain 1.0, but keep the shape).
+    let peak = {
+        let mut probe = StreamGraph::try_from_doc(&doc).unwrap();
+        let (mut l, mut r) = (vec![0.0f32; got.len()], vec![0.0f32; got.len()]);
+        probe.fill_stereo(&mut l, &mut r);
+        l.iter().chain(r.iter()).fold(0.0f32, |m, x| m.max(x.abs()))
+    };
+    let gain = if peak > crate::dsp::CEIL {
+        crate::dsp::CEIL / peak
+    } else {
+        1.0
+    };
+    let scaled: Vec<f32> = got.iter().map(|x| x * gain).collect();
+    assert_eq!(bits(&scaled), bits(&product.mono), "mono fill is the mid");
+}
+
+#[test]
+fn tracks_blockers_name_the_failing_part_with_context() {
+    let part = |part: &str, cause: StreamBlocker| StreamBlocker::TracksPart {
+        part: part.to_string(),
+        cause: Box::new(cause),
+    };
+    let cases: &[(&str, StreamBlocker)] = &[
+        // An offline-only effect on one track names the track.
+        (
+            r#"{ "name":"a", "duration":0.1, "version":2, "engine":2, "root": { "type":"tracks", "tracks": [
+                { "id":"pad", "node": { "type":"chain", "stages": [
+                    { "type":"sine", "freq":220 }, { "type":"convolve", "decay":0.8, "mix":0.5 } ] } },
+                { "id":"bass", "node": { "type":"sawtooth", "freq":55 } } ] } }"#,
+            part(
+                "track 'pad'",
+                StreamBlocker::OfflineEffect { name: "convolve" },
+            ),
+        ),
+        // A sampler track names the track.
+        (
+            r#"{ "name":"b", "duration":0.1, "version":2, "engine":2, "root": { "type":"tracks", "tracks": [
+                { "id":"keys", "node": { "type":"seq", "wave":"sampler", "sf2":"x.sf2", "bpm":100,
+                    "env": { "a":0.001, "s":1.0, "r":0.1 },
+                    "notes": [ { "step":0, "len":4, "pitch":"C4" } ] } } ] } }"#,
+            part("track 'keys'", StreamBlocker::Sampler),
+        ),
+        // A modulated filter on one track names the track.
+        (
+            r#"{ "name":"c", "duration":0.1, "version":2, "engine":2, "root": { "type":"tracks", "tracks": [
+                { "id":"lead", "node": { "type":"chain", "stages": [
+                    { "type":"sawtooth", "freq":110 },
+                    { "type":"lowpass", "cutoff": { "lfo": { "rate":2, "depth":400, "center":800 } } } ] } } ] } }"#,
+            part("track 'lead'", StreamBlocker::ModulatedFilter),
+        ),
+        // A master-chain blocker names the master chain.
+        (
+            r#"{ "name":"d", "duration":0.1, "version":2, "engine":2, "root": { "type":"tracks",
+                "tracks": [ { "id":"a", "node": { "type":"sine", "freq":220 } } ],
+                "master": [ { "type":"granular", "grain_ms":60, "density":30 } ] } }"#,
+            part(
+                "the master chain",
+                StreamBlocker::OfflineEffect { name: "granular" },
+            ),
+        ),
+        // A bus-insert blocker names the bus.
+        (
+            r#"{ "name":"e", "duration":0.1, "version":2, "engine":2, "root": { "type":"tracks",
+                "buses": [ { "id":"verb", "effects": [ { "type":"convolve" } ] } ],
+                "tracks": [ { "id":"a", "node": { "type":"sine", "freq":220 }, "bus":"verb" } ] } }"#,
+            part(
+                "bus 'verb'",
+                StreamBlocker::OfflineEffect { name: "convolve" },
+            ),
+        ),
+        // A v1 tracks root keeps the Player fallback (shared-stream threading).
+        (
+            r#"{ "name":"f", "duration":0.1, "root": { "type":"tracks", "tracks": [
+                { "node": { "type":"sine", "freq":440 } } ] } }"#,
+            StreamBlocker::TracksRoot,
+        ),
+        // An id-less track is named by its backfilled layer id.
+        (
+            r#"{ "name":"g", "duration":0.1, "version":2, "engine":2, "root": { "type":"tracks", "tracks": [
+                { "node": { "type":"sine", "freq":440 } },
+                { "node": { "type":"chain", "stages": [
+                    { "type":"sine", "freq":220 }, { "type":"granular" } ] } } ] } }"#,
+            part(
+                "track 'layer_1'",
+                StreamBlocker::OfflineEffect { name: "granular" },
+            ),
+        ),
+    ];
+    for (json, want) in cases {
+        let doc = parse(json);
+        let got = StreamGraph::blockers(&doc);
+        assert!(got.contains(want), "{json}: got {got:?}");
+        assert!(StreamGraph::try_from_doc(&doc).is_none(), "{json}");
+        // The message carries both the context and the cause's fix.
+        let msg = want.to_string();
+        assert!(msg.contains('—'), "{msg}");
+        if let StreamBlocker::TracksPart { part, .. } = want {
+            assert!(msg.contains(part), "{msg}");
+        }
+    }
+}
+
+#[test]
+fn tracks_doc_level_blockers_still_fire() {
+    // normalize / loop / stereo treatments stay whole-buffer blockers even
+    // though the v2 mixer itself streams.
+    let cases: &[(&str, StreamBlocker)] = &[
+        (
+            r#"{ "name":"n", "duration":0.1, "version":2, "engine":2,
+                "normalize": { "target_lufs": -14 },
+                "root": { "type":"tracks", "tracks": [ { "node": { "type":"sine", "freq":440 } } ] } }"#,
+            StreamBlocker::Normalize,
+        ),
+        (
+            r#"{ "name":"l", "duration":0.5, "version":2, "engine":2,
+                "playback": { "mode":"loop", "start_secs":0.1, "crossfade_secs":0.05 },
+                "root": { "type":"tracks", "tracks": [ { "node": { "type":"sine", "freq":220 } } ] } }"#,
+            StreamBlocker::LoopPlayback,
+        ),
+        (
+            r#"{ "name":"s", "duration":0.1, "version":2, "engine":2,
+                "stereo": { "mode":"haas", "ms":12 },
+                "root": { "type":"tracks", "tracks": [ { "node": { "type":"sine", "freq":220 } } ] } }"#,
+            StreamBlocker::StereoTreatment,
+        ),
+    ];
+    for (json, want) in cases {
+        let doc = parse(json);
+        let got = StreamGraph::blockers(&doc);
+        assert_eq!(got, vec![want.clone()], "{json}");
+        assert!(StreamGraph::try_from_doc(&doc).is_none(), "{json}");
+    }
+}
+
 // ---- randomized byte-identity fuzz over the streamable node set ----
 
 fn rf(rng: &mut Rng, lo: f64, hi: f64) -> f64 {
@@ -639,6 +1005,22 @@ fn blockers_agrees_with_try_from_doc() {
         r#"{ "name":"c", "duration":0.1, "root": { "type":"mul", "inputs": [
             { "type":"fm", "freq":440, "ratio":2.0, "index": { "slide": { "from":4, "to":1, "secs":0.08 } } },
             { "type":"env", "a":0.001, "d":0.09, "s":0.0, "r":0.03 } ] } }"#,
+        // A schema-v2 mixer with automation, a sidechain, and a bus streams.
+        r#"{ "name":"tv", "duration":0.2, "version":2, "engine":2, "seed":3,
+            "root": { "type":"tracks",
+              "buses": [ { "id":"verb", "gain":0.8, "effects": [ { "type":"reverb", "room":0.4, "mix":0.3 } ] } ],
+              "tracks": [
+                { "id":"kick", "node": { "type":"seq", "bpm":120, "steps_per_beat":4, "wave":"square",
+                    "env": { "a":0.001, "d":0.05, "s":0.4, "r":0.05 },
+                    "notes": [ { "step":0, "len":2, "pitch":"C3" } ] },
+                  "sends": [ { "bus":"verb", "amount":0.4 } ] },
+                { "id":"bass", "node": { "type":"chain", "stages": [
+                      { "type":"sawtooth", "freq":55 }, { "type":"lowpass", "cutoff":500, "q":0.8 } ] },
+                  "gain":0.7, "at":0.01,
+                  "automation": [ { "target":"gain", "points": [ { "t":0.0, "v":0.3 }, { "t":0.2, "v":0.7 } ] } ],
+                  "sidechain": { "source":"kick", "amount":0.7, "attack":0.005, "release":0.1 } }
+              ],
+              "master": [ { "type":"reverb", "room":0.3, "mix":0.2 } ] } }"#,
     ];
     for json in streamable {
         let doc = parse(json);
@@ -657,6 +1039,10 @@ fn blockers_agrees_with_try_from_doc() {
         r#"{ "name":"g", "duration":0.1, "root": { "type":"chain", "stages": [
             { "type":"sine", "freq":220 },
             { "type":"granular" } ] } }"#,
+        // A v2 mixer with an unstreamable part reports the part and rejects.
+        r#"{ "name":"h", "duration":0.1, "version":2, "engine":2, "root": { "type":"tracks", "tracks": [
+            { "id":"pad", "node": { "type":"chain", "stages": [
+                { "type":"sine", "freq":220 }, { "type":"convolve" } ] } } ] } }"#,
     ];
     for json in blocked {
         let doc = parse(json);

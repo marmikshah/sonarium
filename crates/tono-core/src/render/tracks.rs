@@ -7,7 +7,9 @@ use super::output::{make_loop_buffer, normalize_output, normalize_output_v4};
 #[cfg(feature = "sampler")]
 use super::seq::{SeqVoice, sampler_seq_stereo};
 use super::{Signal, apply_processor, render_node};
-use crate::dsl::{AutoLane, AutoTarget, Node, Playback, SeqWave, Sidechain, SoundDoc, Track};
+use crate::dsl::{
+    AutoCurve, AutoLane, AutoPoint, AutoTarget, Node, Playback, SeqWave, Sidechain, SoundDoc, Track,
+};
 use crate::dsp::{Rng, layer_stream_key, peak_limit};
 
 /// One track's raw render, kept whole until the mix pass so sidechain
@@ -27,8 +29,9 @@ enum TrackRender {
 
 /// Equal-power channel gains for a `pan`/`gain` pair — one formula for the
 /// constant fast path and the per-sample automated path, so they can never
-/// drift (identical f32 op order, byte-identical output).
-fn pan_gains(pan: f32, gain: f32) -> (f32, f32) {
+/// drift (identical f32 op order, byte-identical output). Shared with the
+/// streaming mixer ([`crate::streaming`]) for the same reason.
+pub(crate) fn pan_gains(pan: f32, gain: f32) -> (f32, f32) {
     let theta = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
     (theta.cos() * gain, theta.sin() * gain)
 }
@@ -36,8 +39,9 @@ fn pan_gains(pan: f32, gain: f32) -> (f32, f32) {
 /// Derive a track's independent RNG stream from the document seed (schema
 /// v2). `stream` is the track's FNV stream key (or `MASTER_STREAM`), not a
 /// track index. SplitMix64 finalizer over a golden-gamma offset, so streams
-/// never correlate with each other or with the v1 threaded stream.
-fn track_stream_seed(seed: u64, stream: u64) -> u64 {
+/// never correlate with each other or with the v1 threaded stream. Shared
+/// with the streaming mixer, which seeds each track's graph identically.
+pub(crate) fn track_stream_seed(seed: u64, stream: u64) -> u64 {
     crate::dsp::splitmix_mix(
         seed ^ stream
             .wrapping_add(1)
@@ -46,7 +50,7 @@ fn track_stream_seed(seed: u64, stream: u64) -> u64 {
 }
 
 /// The master bus's stream key (validate rejects a layer id hashing to it).
-const MASTER_STREAM: u64 = u64::MAX;
+pub(crate) const MASTER_STREAM: u64 = u64::MAX;
 
 /// True when a track renders in native stereo (a sampler seq) — a cheap shape
 /// test; the actual rendering happens in [`track_native_stereo`].
@@ -93,6 +97,93 @@ pub struct TracksRender {
     pub layers: Vec<LayerStats>,
 }
 
+/// A persistent cursor over one automation lane, producing the exact values
+/// the original whole-buffer scan produced — the ONE definition of the lane
+/// math the offline mixer (per [`lane_for`]) and the streaming renderer's
+/// block-wise evaluation share, so they can never drift. [`LaneCursor::at`]
+/// must be called with monotonically non-decreasing sample indices (the
+/// segment cursor only advances); starting mid-lane is fine — the strict-`>`
+/// advance picks the same segment a from-zero scan would.
+pub(crate) struct LaneCursor {
+    /// Breakpoints sorted by time (the lane's authored order is not trusted).
+    pts: Vec<AutoPoint>,
+    curve: AutoCurve,
+    /// The persistent segment cursor.
+    idx: usize,
+}
+
+impl LaneCursor {
+    /// The cursor for `target` in `automation`, or `None` if no lane controls
+    /// it (then the static value applies — the byte-identical fast path).
+    /// `default` is the static value an empty-points lane holds.
+    pub(crate) fn build(automation: &[AutoLane], target: AutoTarget, default: f32) -> Option<Self> {
+        let lane = automation.iter().find(|l| l.target == target)?;
+        // An empty lane holds the static value; a single breakpoint holds
+        // flat. Both collapse to one synthetic flat point so `at`'s guards
+        // are total — a NaN sample time (or a NaN point time on an
+        // unvalidated doc) would otherwise fall through both comparisons
+        // into the segment scan and index out of bounds.
+        if lane.points.len() < 2 {
+            let v = lane.points.first().map_or(default, |p| p.v);
+            return Some(LaneCursor {
+                pts: vec![AutoPoint { t: 0.0, v }],
+                curve: lane.curve,
+                idx: 0,
+            });
+        }
+        let mut pts = lane.points.clone();
+        pts.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
+        Some(LaneCursor {
+            pts,
+            curve: lane.curve,
+            idx: 0,
+        })
+    }
+
+    /// The lane's value at sample `i` (`sr` the document's sample rate).
+    /// Interpolation over the sorted breakpoints per the lane's curve,
+    /// holding flat past either end. Strict `>` in the advance keeps the
+    /// exact segment the from-zero scan would pick — a sample landing on a
+    /// breakpoint interpolates in the earlier segment, so the floats (and
+    /// the rendered bytes) are unchanged.
+    pub(crate) fn at(&mut self, i: usize, sr: u32) -> f32 {
+        let t = i as f32 / sr as f32;
+        if t <= self.pts[0].t {
+            return self.pts[0].v;
+        }
+        let last = &self.pts[self.pts.len() - 1];
+        if t >= last.t {
+            return last.v;
+        }
+        while t > self.pts[self.idx + 1].t {
+            self.idx += 1;
+        }
+        let (w0, w1) = (&self.pts[self.idx], &self.pts[self.idx + 1]);
+        let span = (w1.t - w0.t).max(1e-9);
+        let u = (t - w0.t) / span;
+        match self.curve {
+            AutoCurve::Linear => w0.v + (w1.v - w0.v) * u,
+            // Hold w0 until the next breakpoint lands.
+            AutoCurve::Step => {
+                if u >= 1.0 {
+                    w1.v
+                } else {
+                    w0.v
+                }
+            }
+            // Exponential between same-sign positive endpoints; any other
+            // segment degrades to linear (deterministic).
+            AutoCurve::Exp => {
+                if w0.v > 0.0 && w1.v > 0.0 {
+                    w0.v * (w1.v / w0.v).powf(u)
+                } else {
+                    w0.v + (w1.v - w0.v) * u
+                }
+            }
+        }
+    }
+}
+
 /// Per-sample values for a track-automation `target`, or `None` if no lane
 /// controls it (then the static value applies — the byte-identical fast path).
 fn lane_for(
@@ -102,66 +193,8 @@ fn lane_for(
     sr: u32,
     default: f32,
 ) -> Option<Vec<f32>> {
-    let lane = automation.iter().find(|l| l.target == target)?;
-    if lane.points.is_empty() {
-        return Some(vec![default; n]);
-    }
-    // A single breakpoint holds flat — and guards the segment scan below:
-    // with one point a NaN sample time (or a NaN point time on an
-    // unvalidated doc) would fall past both early returns into pts[idx + 1].
-    if lane.points.len() == 1 {
-        return Some(vec![lane.points[0].v; n]);
-    }
-    let mut pts = lane.points.clone();
-    pts.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
-    // Interpolation over the sorted breakpoints per the lane's curve, holding
-    // flat past either end. The sample time is strictly increasing, so a
-    // persistent segment cursor replaces a from-zero scan per sample
-    // (O(n + p), not O(n·p)). Strict `>` in the advance keeps the exact
-    // segment the scan would pick — a sample landing on a breakpoint
-    // interpolates in the earlier segment, so the floats (and the rendered
-    // bytes) are unchanged.
-    let mut idx = 0;
-    Some(
-        (0..n)
-            .map(|i| {
-                let t = i as f32 / sr as f32;
-                if t <= pts[0].t {
-                    return pts[0].v;
-                }
-                let last = &pts[pts.len() - 1];
-                if t >= last.t {
-                    return last.v;
-                }
-                while t > pts[idx + 1].t {
-                    idx += 1;
-                }
-                let (w0, w1) = (&pts[idx], &pts[idx + 1]);
-                let span = (w1.t - w0.t).max(1e-9);
-                let u = (t - w0.t) / span;
-                match lane.curve {
-                    crate::dsl::AutoCurve::Linear => w0.v + (w1.v - w0.v) * u,
-                    // Hold w0 until the next breakpoint lands.
-                    crate::dsl::AutoCurve::Step => {
-                        if u >= 1.0 {
-                            w1.v
-                        } else {
-                            w0.v
-                        }
-                    }
-                    // Exponential between same-sign positive endpoints; any
-                    // other segment degrades to linear (deterministic).
-                    crate::dsl::AutoCurve::Exp => {
-                        if w0.v > 0.0 && w1.v > 0.0 {
-                            w0.v * (w1.v / w0.v).powf(u)
-                        } else {
-                            w0.v + (w1.v - w0.v) * u
-                        }
-                    }
-                }
-            })
-            .collect(),
-    )
+    let mut cursor = LaneCursor::build(automation, target, default)?;
+    Some((0..n).map(|i| cursor.at(i, sr)).collect())
 }
 
 /// The gain-reduction envelope for one follower track: the `duck` node's

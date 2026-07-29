@@ -265,20 +265,26 @@ impl Program {
 /// The streaming blockers of a resolved document, as warnings with per-kind
 /// codes in the T15xx band.
 pub(crate) fn blocker_warnings(doc: &SoundDoc) -> Vec<Diagnostic> {
+    /// The per-kind code; a mixer part reports its cause's code (the message
+    /// already carries the track/bus context).
+    fn code(b: &crate::streaming::StreamBlocker) -> &'static str {
+        use crate::streaming::StreamBlocker as B;
+        match b {
+            B::Normalize => "T1501",
+            B::LoopPlayback => "T1502",
+            B::StereoTreatment => "T1503",
+            B::TracksRoot => "T1504",
+            B::LegacyRng { .. } => "T1505",
+            B::Sampler => "T1506",
+            B::ModulatedFilter => "T1507",
+            B::OfflineEffect { .. } => "T1508",
+            B::TracksPart { cause, .. } => code(cause),
+        }
+    }
     StreamGraph::blockers(doc)
         .into_iter()
         .map(|b| {
-            let code = match b {
-                crate::streaming::StreamBlocker::Normalize => "T1501",
-                crate::streaming::StreamBlocker::LoopPlayback => "T1502",
-                crate::streaming::StreamBlocker::StereoTreatment => "T1503",
-                crate::streaming::StreamBlocker::TracksRoot => "T1504",
-                crate::streaming::StreamBlocker::LegacyRng { .. } => "T1505",
-                crate::streaming::StreamBlocker::Sampler => "T1506",
-                crate::streaming::StreamBlocker::ModulatedFilter => "T1507",
-                crate::streaming::StreamBlocker::OfflineEffect { .. } => "T1508",
-            };
-            Diagnostic::warning(code, "doc", b.to_string()).with_remediation(
+            Diagnostic::warning(code(&b), "doc", b.to_string()).with_remediation(
                 "the offline render is unaffected; live playback uses the buffer-backed Player",
             )
         })

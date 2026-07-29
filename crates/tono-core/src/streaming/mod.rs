@@ -20,21 +20,29 @@
 //!   is evaluation-order-independent and streams byte-identically. seq is
 //!   pre-rendered with that seed via the exact offline synthesis and read back
 //!   block-by-block.
+//! - **The `tracks` mixing console** (schema v2): every track streams its own
+//!   id-keyed graph with its `at` offset, the per-sample pan/gain mix pass
+//!   (automation lanes included) runs on persistent cursors, sidechain ducks
+//!   carry their envelopes across blocks, and the bus/master insert chains
+//!   run as stereo processor pairs (reverb gets the 0/23 decorrelated
+//!   spread) — byte-identical to the offline mixer at any block size (see
+//!   [`tracks`]).
 //!
 //! What falls back to the byte-identical buffer-backed
 //! [`crate::player::Player`]: RNG nodes under `engine < 2` (they keep the old
 //! shared, order-dependent stream); the **sampler** seq (an external stateful
-//! rustysynth voice); a **`tracks` root** (the stereo mixer + master path — the
-//! runtime's instance-per-layer model covers layering); a **`normalize`**
-//! output stage (a whole-buffer op); **`loop` playback** (the crossfaded loop
-//! body is a whole-buffer transform); a **stereo** (Haas/Wide) treatment
-//! (applied at write time, not in the graph); and the **offline-only effects**
-//! `convolve` / `granular` (whole-buffer ops: FFT convolution, out-of-order
-//! grain reads). [`StreamGraph::blockers`] reports
+//! rustysynth voice); a **schema-v1 `tracks` root** (its single RNG stream
+//! threads through the track list in order — irreproducible block-wise); a
+//! **`normalize`** output stage (a whole-buffer op); **`loop` playback** (the
+//! crossfaded loop body is a whole-buffer transform); a **stereo** (Haas/Wide)
+//! treatment (applied at write time, not in the graph); and the
+//! **offline-only effects** `convolve` / `granular` (whole-buffer ops: FFT
+//! convolution, out-of-order grain reads). [`StreamGraph::blockers`] reports
 //! exactly which of these a document trips, with the fix for each.
 
 mod proc;
 mod source;
+mod tracks;
 pub(crate) mod value;
 
 #[cfg(test)]
@@ -59,8 +67,19 @@ pub enum StreamBlocker {
     LoopPlayback,
     /// A Haas/Wide stereo treatment is applied at write time, not in the graph.
     StereoTreatment,
-    /// A `tracks` root mixes layers on the stereo bus.
+    /// A schema-v1 `tracks` root threads one shared RNG stream through its
+    /// tracks in order — irreproducible block-wise.
     TracksRoot,
+    /// A schema-v2 `tracks` mixer's part — a track's graph, a bus's insert
+    /// chain, or the master chain — can't stream. Wraps the node-level cause
+    /// with where it lives, so the author knows which channel to fix.
+    TracksPart {
+        /// Where the cause lives: `track '<layer id>'`, `bus '<bus id>'`, or
+        /// `the master chain`.
+        part: String,
+        /// The node-level blocker the part trips.
+        cause: Box<StreamBlocker>,
+    },
     /// `noise` / `dust` / `seq` draw from the old shared, order-dependent RNG
     /// stream under this engine revision.
     LegacyRng {
@@ -98,8 +117,9 @@ impl fmt::Display for StreamBlocker {
             ),
             StreamBlocker::TracksRoot => write!(
                 f,
-                "a tracks root mixes layers on the stereo bus — stream one source per layer (the runtime's instance-per-layer model) instead"
+                "a schema-v1 tracks root threads one shared RNG stream through its tracks in order — set \"version\": 2 for id-keyed per-track streams that stream natively"
             ),
+            StreamBlocker::TracksPart { part, cause } => write!(f, "{part}: {cause}"),
             StreamBlocker::LegacyRng { engine } => write!(
                 f,
                 "noise/dust/seq draw from the shared order-dependent RNG stream under engine {engine} — set \"engine\": 2 or later for structurally-seeded RNG"
@@ -120,9 +140,76 @@ impl fmt::Display for StreamBlocker {
     }
 }
 
+/// The node-level streaming blockers of one graph, pushed through `push` —
+/// the per-node rules shared by the plain-document walk and the mixer's
+/// per-part walk (which wraps each cause with its track/bus context).
+fn node_blockers(node: &Node, engine: u32, push: &mut impl FnMut(StreamBlocker)) {
+    match node {
+        // A nested mixer (validation rejects it) can't stream either.
+        Node::Tracks { .. } => push(StreamBlocker::TracksRoot),
+        Node::Noise { .. } | Node::Dust { .. } if engine < 2 => {
+            push(StreamBlocker::LegacyRng { engine });
+        }
+        Node::Seq { wave, .. } => {
+            if engine < 2 {
+                push(StreamBlocker::LegacyRng { engine });
+            }
+            if *wave == SeqWave::Sampler {
+                push(StreamBlocker::Sampler);
+            }
+        }
+        // Filters/EQ/gain only stream with a constant cutoff/amount (the
+        // streaming biquads hold constant coefficients).
+        Node::Gain {
+            amount: Value::Modulated(_),
+        } => {
+            push(StreamBlocker::ModulatedFilter);
+        }
+        Node::Lowpass {
+            cutoff: Value::Modulated(_),
+            ..
+        }
+        | Node::Highpass {
+            cutoff: Value::Modulated(_),
+            ..
+        }
+        | Node::Bandpass {
+            cutoff: Value::Modulated(_),
+            ..
+        }
+        | Node::Notch {
+            cutoff: Value::Modulated(_),
+            ..
+        }
+        | Node::Peak {
+            cutoff: Value::Modulated(_),
+            ..
+        }
+        | Node::Lowshelf {
+            cutoff: Value::Modulated(_),
+            ..
+        }
+        | Node::Highshelf {
+            cutoff: Value::Modulated(_),
+            ..
+        } => {
+            push(StreamBlocker::ModulatedFilter);
+        }
+        // Offline-only whole-buffer effects (FFT convolution; out-of-order
+        // granular reads) — no per-sample streaming form exists.
+        Node::Convolve { .. } => {
+            push(StreamBlocker::OfflineEffect { name: "convolve" });
+        }
+        Node::Granular { .. } => {
+            push(StreamBlocker::OfflineEffect { name: "granular" });
+        }
+        _ => {}
+    }
+}
+
 /// A stateful, block-by-block renderer for a supported graph.
 pub struct StreamGraph {
-    root: Src,
+    root: Root,
     pos: usize,
     /// Live note-pitch scale (1.0 = as authored). Smoothed per-sample toward
     /// `pitch_target` so a note change / portamento never zippers or clicks.
@@ -137,12 +224,20 @@ pub struct StreamGraph {
     bend: f32,
 }
 
+/// The streamed root: a plain mono graph, or a schema-v2 `tracks` mixer.
+enum Root {
+    Mono(Src),
+    Tracks(tracks::StreamTracks),
+}
+
 impl StreamGraph {
     /// Why `doc` can't stream — one entry per blocking feature (doc-level
     /// first, then nodes in walk order), empty when [`try_from_doc`](Self::try_from_doc)
     /// would succeed. The actionable companion to the silent `Option`: the
     /// Engine/StreamSource fallback path stays allocation-free, and authors
-    /// get the reason and the fix.
+    /// get the reason and the fix. A schema-v2 `tracks` root streams natively
+    /// when every part does, so its blockers name the failing part (track,
+    /// bus, or master chain) with the node-level cause.
     pub fn blockers(doc: &SoundDoc) -> Vec<StreamBlocker> {
         let mut out = Vec::new();
         if doc.normalize.is_some() {
@@ -154,69 +249,65 @@ impl StreamGraph {
         if !matches!(doc.stereo, Stereo::Mono) {
             out.push(StreamBlocker::StereoTreatment);
         }
-        if matches!(doc.root, Node::Tracks { .. }) {
-            out.push(StreamBlocker::TracksRoot);
-        }
         let engine = doc.effective_engine();
-        doc.root.walk(&mut |node| match node {
-            Node::Noise { .. } | Node::Dust { .. } if engine < 2 => {
-                out.push(StreamBlocker::LegacyRng { engine });
-            }
-            Node::Seq { wave, .. } => {
-                if engine < 2 {
-                    out.push(StreamBlocker::LegacyRng { engine });
+        match &doc.root {
+            Node::Tracks {
+                tracks,
+                master,
+                buses,
+            } if doc.effective_version() >= 2 => {
+                // The v2 mixer streams natively when every part does —
+                // report the failing part with its context instead of the
+                // blanket TracksRoot.
+                for (ti, t) in tracks.iter().enumerate() {
+                    // The id fallback mirrors the renderer's (and
+                    // `ensure_track_ids`) — the same id the fix addresses.
+                    let layer_id = t.id.clone().unwrap_or_else(|| format!("layer_{ti}"));
+                    let part = format!("track '{layer_id}'");
+                    t.node.walk(&mut |node| {
+                        node_blockers(node, engine, &mut |cause| {
+                            out.push(StreamBlocker::TracksPart {
+                                part: part.clone(),
+                                cause: Box::new(cause),
+                            });
+                        });
+                    });
                 }
-                if *wave == SeqWave::Sampler {
-                    out.push(StreamBlocker::Sampler);
+                for m in master {
+                    m.walk(&mut |node| {
+                        node_blockers(node, engine, &mut |cause| {
+                            out.push(StreamBlocker::TracksPart {
+                                part: "the master chain".to_string(),
+                                cause: Box::new(cause),
+                            });
+                        });
+                    });
+                }
+                for b in buses {
+                    let part = format!("bus '{}'", b.id);
+                    for fx in &b.effects {
+                        fx.walk(&mut |node| {
+                            node_blockers(node, engine, &mut |cause| {
+                                out.push(StreamBlocker::TracksPart {
+                                    part: part.clone(),
+                                    cause: Box::new(cause),
+                                });
+                            });
+                        });
+                    }
                 }
             }
-            // Filters/EQ/gain only stream with a constant cutoff/amount (the
-            // streaming biquads hold constant coefficients).
-            Node::Gain {
-                amount: Value::Modulated(_),
-            } => {
-                out.push(StreamBlocker::ModulatedFilter);
+            // v1 threads one shared RNG stream through the track list in
+            // order — irreproducible block-wise; the Player fallback stays.
+            Node::Tracks { .. } => {
+                out.push(StreamBlocker::TracksRoot);
+                doc.root
+                    .walk(&mut |node| node_blockers(node, engine, &mut |b| out.push(b)));
             }
-            Node::Lowpass {
-                cutoff: Value::Modulated(_),
-                ..
-            }
-            | Node::Highpass {
-                cutoff: Value::Modulated(_),
-                ..
-            }
-            | Node::Bandpass {
-                cutoff: Value::Modulated(_),
-                ..
-            }
-            | Node::Notch {
-                cutoff: Value::Modulated(_),
-                ..
-            }
-            | Node::Peak {
-                cutoff: Value::Modulated(_),
-                ..
-            }
-            | Node::Lowshelf {
-                cutoff: Value::Modulated(_),
-                ..
-            }
-            | Node::Highshelf {
-                cutoff: Value::Modulated(_),
-                ..
-            } => {
-                out.push(StreamBlocker::ModulatedFilter);
-            }
-            // Offline-only whole-buffer effects (FFT convolution; out-of-order
-            // granular reads) — no per-sample streaming form exists.
-            Node::Convolve { .. } => {
-                out.push(StreamBlocker::OfflineEffect { name: "convolve" });
-            }
-            Node::Granular { .. } => {
-                out.push(StreamBlocker::OfflineEffect { name: "granular" });
-            }
-            _ => {}
-        });
+            _ => doc
+                .root
+                .walk(&mut |node| node_blockers(node, engine, &mut |b| out.push(b))),
+        }
         out.dedup();
         out
     }
@@ -231,14 +322,19 @@ impl StreamGraph {
         // The duration clamp mirrors the offline render paths so an
         // unvalidated doc can't request an unbounded seq pre-render here.
         let n = ((doc.duration.clamp(0.0, 600.0) * doc.sample_rate as f32).ceil() as usize).max(1);
-        Some(StreamGraph {
-            root: try_src(
+        let root = if matches!(doc.root, Node::Tracks { .. }) {
+            Root::Tracks(tracks::StreamTracks::build(doc)?)
+        } else {
+            Root::Mono(try_src(
                 &doc.root,
                 doc.sample_rate,
                 n,
                 doc.effective_engine(),
                 doc.seed,
-            )?,
+            )?)
+        };
+        Some(StreamGraph {
+            root,
             pos: 0,
             pitch: 1.0,
             pitch_target: 1.0,
@@ -250,12 +346,54 @@ impl StreamGraph {
     /// Fill `out` with the next block of mono samples, advancing graph state.
     /// At the default pitch (1.0, no glide) this is bit-identical to the offline
     /// render — the pitch multiplier only bites once a caller bends or glides.
+    /// A `tracks` document fills its mid (`0.5 × (L + R)`, what
+    /// [`crate::render::render_product`] hands mono consumers).
     pub fn fill(&mut self, out: &mut [f32]) {
         for s in out.iter_mut() {
             self.pitch += (self.pitch_target - self.pitch) * self.glide;
-            *s = self.root.step(self.pos, self.pitch * self.bend);
+            let pitch = self.pitch * self.bend;
+            *s = match &mut self.root {
+                Root::Mono(src) => src.step(self.pos, pitch),
+                Root::Tracks(mix) => {
+                    let (l, r) = mix.step(pitch);
+                    0.5 * (l + r)
+                }
+            };
             self.pos += 1;
         }
+    }
+
+    /// Fill `left` / `right` with the next block of the stereo bus. A plain
+    /// document is mono — both channels carry the same signal (exactly what
+    /// [`crate::runtime::StreamSource`] duplicates today); a `tracks`
+    /// document produces its real stereo image, bit-identical to the offline
+    /// mixer's bus. The slice lengths must match.
+    pub fn fill_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
+        assert_eq!(left.len(), right.len(), "stereo blocks must match");
+        for (l, r) in left.iter_mut().zip(right.iter_mut()) {
+            self.pitch += (self.pitch_target - self.pitch) * self.glide;
+            let pitch = self.pitch * self.bend;
+            match &mut self.root {
+                Root::Mono(src) => {
+                    let v = src.step(self.pos, pitch);
+                    *l = v;
+                    *r = v;
+                }
+                Root::Tracks(mix) => {
+                    let (a, b) = mix.step(pitch);
+                    *l = a;
+                    *r = b;
+                }
+            }
+            self.pos += 1;
+        }
+    }
+
+    /// True when the streamed document renders a real stereo image (a
+    /// schema-v2 `tracks` mixer) — `fill_stereo` then produces distinct
+    /// channels, and the bounce's peak limit is measured over both.
+    pub fn is_stereo(&self) -> bool {
+        matches!(self.root, Root::Tracks(_))
     }
 
     /// Set the pitch scale instantly (1.0 = as built, 2.0 = an octave up).
@@ -298,7 +436,11 @@ impl StreamGraph {
     /// recomputed in place, preserving state, so the sweep never clicks.
     /// Bit-identical to the built graph at `scale == 1.0`.
     pub fn set_cutoff(&mut self, scale: f32) {
-        self.root.set_cutoff(scale.max(0.01));
+        let scale = scale.max(0.01);
+        match &mut self.root {
+            Root::Mono(src) => src.set_cutoff(scale),
+            Root::Tracks(mix) => mix.set_cutoff(scale),
+        }
     }
 }
 

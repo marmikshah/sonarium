@@ -381,6 +381,51 @@ fn stream_source_rejects_non_streamable() {
 }
 
 #[test]
+fn stream_source_matches_the_stereo_bounce_of_a_tracks_doc() {
+    // A schema-v2 mixer streams its real stereo bus now. Hot faders push the
+    // joint peak past the 0.989 ceiling, so the bounce's shared peak-limit
+    // gain bites — the stream must carry the identical gain and reproduce
+    // both channels bit-for-bit (pan/sidechain/bus/master chain included).
+    let d: SoundDoc = serde_json::from_str(
+        r#"{ "name":"loudmix", "duration":0.4, "seed":5, "version":2, "engine":4,
+            "root": { "type":"tracks",
+              "buses": [ { "id":"verb", "gain":0.9, "effects": [
+                  { "type":"reverb", "room":0.5, "mix":0.4 } ] } ],
+              "tracks": [
+                { "id":"kick", "node": { "type":"seq", "bpm":180, "steps_per_beat":4, "wave":"kit",
+                    "env": { "a":0.001, "d":0.08, "s":0.0, "r":0.04 },
+                    "notes": [ { "step":0, "len":1, "pitch":"midi:36" },
+                               { "step":2, "len":1, "pitch":"midi:38" } ] },
+                  "gain":1.4 },
+                { "id":"bass", "node": { "type":"chain", "stages": [
+                      { "type":"sawtooth", "freq":55 }, { "type":"lowpass", "cutoff":500, "q":0.9 } ] },
+                  "gain":1.2, "pan":-0.5,
+                  "sidechain": { "source":"kick", "amount":0.8, "attack":0.004, "release":0.1 } },
+                { "id":"pad", "node": { "type":"super", "wave":"sawtooth", "freq":220,
+                      "voices":5, "detune_cents":12 },
+                  "gain":0.9, "pan":0.6, "at":0.02,
+                  "sends": [ { "bus":"verb", "amount":0.7 } ] }
+              ],
+              "master": [ { "type":"reverb", "room":0.4, "mix":0.25 } ] } }"#,
+    )
+    .unwrap();
+    assert!(crate::streaming::StreamGraph::blockers(&d).is_empty());
+    let product = crate::render::render_product(&d);
+    let (el, er) = product.stereo.expect("a tracks doc renders stereo");
+    let mut src = StreamSource::from_doc(&d).expect("streamable");
+    let mut out = vec![0.0f32; el.len() * 2];
+    src.fill(&mut out);
+    for (i, (l, r)) in el.iter().zip(er.iter()).enumerate() {
+        assert_eq!(out[i * 2].to_bits(), l.to_bits(), "left diverges at {i}");
+        assert_eq!(
+            out[i * 2 + 1].to_bits(),
+            r.to_bits(),
+            "right diverges at {i}"
+        );
+    }
+}
+
+#[test]
 fn mixer_sums_and_reaches_in_by_type() {
     let mut e = Engine::new(44_100);
     let p = e.load(&doc(1.0));

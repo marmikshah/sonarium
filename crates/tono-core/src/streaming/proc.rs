@@ -402,6 +402,28 @@ fn biquad(kind: FilterKind, fc: f32, q: f32, sr: u32) -> Proc {
     }
 }
 
+/// A streaming reverb at `sr` with `spread` extra samples per delay line —
+/// the stereo decorrelation the offline mixer gives bus/master reverbs
+/// (left 0, right 23; [`crate::render`]'s `reverb` takes the same spread).
+pub(super) fn reverb_proc(room: f32, mix: f32, sr: u32, spread: usize) -> Proc {
+    let (comb_lens, allpass_lens) = crate::dsp::freeverb_lengths(sr, spread);
+    Proc::Reverb {
+        combs: comb_lens
+            .iter()
+            .map(|&len| (vec![0.0f32; len], 0usize, 0.0f32))
+            .collect(),
+        allpasses: allpass_lens
+            .iter()
+            .map(|&len| (vec![0.0f32; len], 0usize))
+            .collect(),
+        feedback: crate::dsp::freeverb_feedback(room),
+        damp: crate::dsp::FREEVERB_DAMP,
+        g: 0.5,
+        comb_norm: 1.0 / comb_lens.len() as f32,
+        mix: mix.clamp(0.0, 1.0),
+    }
+}
+
 pub(super) fn try_proc(node: &Node, sr: u32, n: usize, engine: u32, path: u64) -> Option<Proc> {
     let srf = sr as f32;
     // Filters/EQ only stream with a constant cutoff.
@@ -446,24 +468,7 @@ pub(super) fn try_proc(node: &Node, sr: u32, n: usize, engine: u32, path: u64) -
                 feedback: *feedback,
             }
         }
-        Node::Reverb { room, mix } => {
-            let (comb_lens, allpass_lens) = crate::dsp::freeverb_lengths(sr, 0);
-            Proc::Reverb {
-                combs: comb_lens
-                    .iter()
-                    .map(|&len| (vec![0.0f32; len], 0usize, 0.0f32))
-                    .collect(),
-                allpasses: allpass_lens
-                    .iter()
-                    .map(|&len| (vec![0.0f32; len], 0usize))
-                    .collect(),
-                feedback: crate::dsp::freeverb_feedback(*room),
-                damp: crate::dsp::FREEVERB_DAMP,
-                g: 0.5,
-                comb_norm: 1.0 / comb_lens.len() as f32,
-                mix: mix.clamp(0.0, 1.0),
-            }
-        }
+        Node::Reverb { room, mix } => reverb_proc(*room, *mix, sr, 0),
         Node::Modal { modes, mix } => {
             let modes = modes
                 .iter()
