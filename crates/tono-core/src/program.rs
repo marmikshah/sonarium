@@ -1,0 +1,347 @@
+//! program — the immutable result of compiling a [`Song`](crate::song::Song)
+//! (ADR 0003).
+//!
+//! A [`Program`] is the artifact applications render, ship, and (from
+//! 1.10.0-alpha.3) run: the resolved [`SoundDoc`], the musical metadata a
+//! transport needs, bounded resource estimates, streaming-coverage warnings,
+//! and a canonical content hash — all under three independently evolving
+//! version pins (`SCHEMA_VERSION`, `ENGINE_VERSION`, [`PROGRAM_VERSION`]).
+//! A Program is immutable by convention: it is *validated and resolved*, so
+//! mutating a public field invalidates [`Program::hash`] (a round-trip
+//! through [`Program::from_json`] re-verifies and catches it).
+//!
+//! This API is **experimental** through the 1.10.0 alphas (docs/api-tiers.md).
+
+use serde::{Deserialize, Serialize};
+
+use crate::diag::Diagnostic;
+use crate::dsl::{SeqWave, SoundDoc};
+use crate::ids::TrackId;
+use crate::render;
+use crate::streaming::StreamGraph;
+
+/// The current Program bundle format revision. A Program records the revision
+/// it was compiled with; a loader rejects a bundle newer than itself. Bumped
+/// when the serialized shape (or its semantics) changes — independently of
+/// the document schema and DSP engine revisions.
+pub const PROGRAM_VERSION: u32 = 1;
+
+/// A compiled song: validated, resolved, hashed. Built by
+/// [`Song::compile`](crate::song::Song::compile); reloaded by
+/// [`Program::from_json`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Program {
+    /// The bundle revision (see [`PROGRAM_VERSION`]).
+    pub program_version: u32,
+    /// The resolved document's effective schema version.
+    pub schema_version: u32,
+    /// The resolved document's effective engine revision.
+    pub engine_version: u32,
+    /// Canonical content hash (see [`content_hash`]). Re-verified on load.
+    pub hash: u64,
+    /// The resolved document — renders through the exact same engine as
+    /// everything else; nothing new in the render path.
+    pub doc: SoundDoc,
+    /// The musical metadata a transport (or a host deciding how far ahead to
+    /// schedule) needs — preserved at compile time, not reconstructed.
+    pub meta: ProgramMeta,
+    /// Bounded resource estimates the runtime preallocates from (ADR 0005).
+    pub estimates: ResourceEstimates,
+    /// Compile warnings — in alpha.1 the streaming blockers, re-derived from
+    /// the resolved document on load (a pure function of it), never stored.
+    #[serde(skip)]
+    pub warnings: Vec<Diagnostic>,
+}
+
+/// The musical facts of a compiled song, resolved once at compile time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgramMeta {
+    /// The song's name.
+    pub name: String,
+    /// Tempo in beats per minute (clamped at compile, like the compiler's
+    /// duration math: degenerate tempos floor at 1).
+    pub tempo_bpm: f32,
+    /// Time-signature numerator (4 = 4/4).
+    pub beats_per_bar: u32,
+    /// Grid resolution (4 = sixteenth notes).
+    pub steps_per_beat: u32,
+    /// The song's length in bars (end of its last placement or direct note).
+    pub length_bars: u32,
+    /// Total duration in seconds, including the release/reverb tail.
+    pub duration_secs: f32,
+    /// Total duration in frames (`duration_secs × sample_rate`, rounded).
+    pub duration_frames: u64,
+    /// The sample rate the program was compiled for.
+    pub sample_rate: u32,
+    /// One entry per track, in declaration order (so `id` is stable).
+    pub tracks: Vec<TrackMeta>,
+}
+
+/// One track's identity and role in a compiled program.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackMeta {
+    /// The stable identifier: declaration order at compile time, so an
+    /// unchanged song recompiles to identical ids.
+    pub id: TrackId,
+    /// The track name (also the rendered layer id).
+    pub name: String,
+    /// The instrument voice.
+    pub wave: SeqWave,
+    /// How many notes the track plays (direct notes plus placements).
+    pub notes: u32,
+    /// Whether the track is muted in the mix.
+    pub mute: bool,
+    /// Whether the track is a solo track (every non-solo track is muted).
+    pub solo: bool,
+}
+
+/// Bounded estimates of what a Program costs to render or run. Upper bounds
+/// are stated where an exact figure isn't cheap; the runtime preallocates
+/// from these (ADR 0005).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceEstimates {
+    /// Total render length in frames (mono frame count).
+    pub frames: u64,
+    /// Total note events across all tracks.
+    pub events: u64,
+    /// An upper bound on simultaneously sounding notes across the mix: the
+    /// per-track maxima summed (tracks start together, so their peaks can
+    /// coincide). Voice pools sized to this never steal.
+    pub peak_voices: u32,
+    /// The dominant render allocation: the stereo f32 output buffers
+    /// (`frames × 2 channels × 4 bytes`). Everything else (per-track bounces)
+    /// is bounded by the same order.
+    pub memory_bytes: u64,
+}
+
+/// Why a serialized [`Program`] failed to load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgramError {
+    /// The JSON didn't parse or didn't match the bundle shape.
+    Json(String),
+    /// The bundle's `program_version` is newer than this binary supports.
+    TooNew {
+        /// The bundle's revision.
+        found: u32,
+        /// This binary's [`PROGRAM_VERSION`].
+        supported: u32,
+    },
+    /// The stored hash doesn't match the recomputed one — the bundle was
+    /// hand-edited or corrupted (T3002).
+    HashMismatch {
+        /// The hash stored in the bundle.
+        stored: u64,
+        /// The hash recomputed from the resolved document.
+        computed: u64,
+    },
+}
+
+impl std::fmt::Display for ProgramError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProgramError::Json(e) => write!(f, "program JSON: {e}"),
+            ProgramError::TooNew { found, supported } => write!(
+                f,
+                "T3001: program version {found} is newer than this binary supports ({supported})"
+            ),
+            ProgramError::HashMismatch { stored, computed } => write!(
+                f,
+                "T3002: program hash mismatch (stored {stored:#018x}, computed {computed:#018x}) — \
+                 the bundle was edited or corrupted; recompile the song"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ProgramError {}
+
+/// FNV-1a over bytes — the same primitive the golden corpus uses over sample
+/// bits, here over canonical JSON.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xCBF2_9CE4_8422_2325;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    h
+}
+
+/// The canonical form of a resolved document (ADR 0003): UTF-8 JSON, object
+/// keys sorted (the serde_json default map), no insignificant whitespace,
+/// floats in shortest-round-trip form. Two equivalent songs — authored in
+/// Rust or Python — serialize to the same bytes.
+fn canonical_json(doc: &SoundDoc) -> Vec<u8> {
+    // serde_json's Map is a BTreeMap without the preserve_order feature, so
+    // to_value→to_string is already the canonicalization (sorted keys,
+    // compact separators, ryu float formatting).
+    let value = serde_json::to_value(doc).expect("a resolved document serializes");
+    serde_json::to_string(&value)
+        .expect("a resolved document serializes")
+        .into_bytes()
+}
+
+/// The canonical content hash of a resolved document: FNV-1a over its
+/// canonical JSON. Independent of the authoring structure and of serialization
+/// formatting — equivalent songs hash equal, from Rust or Python alike.
+pub fn content_hash(doc: &SoundDoc) -> u64 {
+    fnv1a(&canonical_json(doc))
+}
+
+impl Program {
+    /// Render the full program to mono samples through the standard engine.
+    pub fn render_mono(&self) -> Vec<f32> {
+        render::render(&self.doc)
+    }
+
+    /// Render the full program to a stereo pair. A compiled song always has a
+    /// stereo mix; a defensively duplicated mono pair is returned if it
+    /// somehow doesn't.
+    pub fn render_stereo(&self) -> (Vec<f32>, Vec<f32>) {
+        let product = render::render_product(&self.doc);
+        product.stereo.unwrap_or_else(|| {
+            let m = product.mono;
+            (m.clone(), m)
+        })
+    }
+
+    /// Whether the resolved document streams natively (no warnings is the
+    /// same signal — blockers are the only warnings alpha.1 produces).
+    pub fn is_streamable(&self) -> bool {
+        self.warnings.is_empty()
+    }
+
+    /// Serialize the bundle (compact JSON; stable field order from the struct).
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).expect("a program serializes")
+    }
+
+    /// Load a bundle: parse, reject a newer revision (T3001), re-verify the
+    /// content hash (T3002), and re-derive the warnings from the resolved
+    /// document. No musical recomputation — loading never recompiles.
+    pub fn from_json(json: &str) -> Result<Program, ProgramError> {
+        let mut program: Program =
+            serde_json::from_str(json).map_err(|e| ProgramError::Json(e.to_string()))?;
+        if program.program_version > PROGRAM_VERSION {
+            return Err(ProgramError::TooNew {
+                found: program.program_version,
+                supported: PROGRAM_VERSION,
+            });
+        }
+        let computed = content_hash(&program.doc);
+        if computed != program.hash {
+            return Err(ProgramError::HashMismatch {
+                stored: program.hash,
+                computed,
+            });
+        }
+        program.warnings = blocker_warnings(&program.doc);
+        Ok(program)
+    }
+}
+
+/// The streaming blockers of a resolved document, as warnings with per-kind
+/// codes in the T15xx band.
+pub(crate) fn blocker_warnings(doc: &SoundDoc) -> Vec<Diagnostic> {
+    StreamGraph::blockers(doc)
+        .into_iter()
+        .map(|b| {
+            let code = match b {
+                crate::streaming::StreamBlocker::Normalize => "T1501",
+                crate::streaming::StreamBlocker::LoopPlayback => "T1502",
+                crate::streaming::StreamBlocker::StereoTreatment => "T1503",
+                crate::streaming::StreamBlocker::TracksRoot => "T1504",
+                crate::streaming::StreamBlocker::LegacyRng { .. } => "T1505",
+                crate::streaming::StreamBlocker::Sampler => "T1506",
+                crate::streaming::StreamBlocker::ModulatedFilter => "T1507",
+                crate::streaming::StreamBlocker::OfflineEffect { .. } => "T1508",
+            };
+            Diagnostic::warning(code, "doc", b.to_string()).with_remediation(
+                "the offline render is unaffected; live playback uses the buffer-backed Player",
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::song::{CompileOptions, Song, note};
+
+    fn two_track_program() -> Program {
+        let mut song = Song::new("prog", 120.0);
+        song.add_track(
+            "bass",
+            crate::dsl::SeqWave::Bass,
+            crate::dsl::Adsr {
+                a: 0.005,
+                d: 0.1,
+                s: 0.8,
+                r: 0.2,
+                punch: 0.0,
+            },
+        );
+        song.add_pattern("riff", 1, vec![note(0, 4, "C2"), note(8, 4, "G2")]);
+        song.arrange("bass", "riff", 0);
+        song.compile(&CompileOptions::default()).expect("compiles")
+    }
+
+    #[test]
+    fn hash_is_canonical_regardless_of_field_order() {
+        let program = two_track_program();
+        let json = serde_json::to_string(&program.doc).unwrap();
+        // Shuffle the top-level key order: parse to a Value, re-emit in a
+        // different order, reparse — the hash must not move.
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let obj = value.as_object_mut().unwrap();
+        let mut entries: Vec<_> = obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        entries.reverse();
+        *obj = entries.into_iter().collect();
+        let reparsed: SoundDoc = serde_json::from_value(value).unwrap();
+        assert_eq!(content_hash(&reparsed), program.hash);
+    }
+
+    #[test]
+    fn program_round_trips_through_json() {
+        let program = two_track_program();
+        let loaded = Program::from_json(&program.to_json()).expect("loads");
+        assert_eq!(loaded.hash, program.hash);
+        assert_eq!(loaded.warnings.len(), program.warnings.len());
+        assert_eq!(loaded.render_mono(), program.render_mono());
+    }
+
+    #[test]
+    fn from_json_rejects_a_newer_revision() {
+        let program = two_track_program();
+        let mut value: serde_json::Value = serde_json::from_str(&program.to_json()).unwrap();
+        value["program_version"] = serde_json::json!(PROGRAM_VERSION + 1);
+        let err = Program::from_json(&serde_json::to_string(&value).unwrap()).unwrap_err();
+        assert_eq!(
+            err,
+            ProgramError::TooNew {
+                found: PROGRAM_VERSION + 1,
+                supported: PROGRAM_VERSION,
+            }
+        );
+    }
+
+    #[test]
+    fn from_json_catches_a_hand_edited_bundle() {
+        let program = two_track_program();
+        let mut value: serde_json::Value = serde_json::from_str(&program.to_json()).unwrap();
+        value["doc"]["duration"] = serde_json::json!(9.0);
+        let err = Program::from_json(&serde_json::to_string(&value).unwrap()).unwrap_err();
+        assert!(matches!(err, ProgramError::HashMismatch { .. }));
+    }
+
+    #[test]
+    fn estimates_bound_the_render() {
+        let program = two_track_program();
+        assert_eq!(program.estimates.events, 2);
+        assert_eq!(program.estimates.peak_voices, 1);
+        assert_eq!(
+            program.estimates.frames,
+            (program.doc.duration * program.doc.sample_rate as f32).round() as u64
+        );
+        assert_eq!(program.estimates.memory_bytes, program.estimates.frames * 8);
+    }
+}

@@ -72,6 +72,7 @@ pub mod instrument;
 pub mod patch;
 pub mod player;
 pub mod presets;
+pub mod program;
 pub mod render;
 #[cfg(feature = "analysis")]
 pub mod review;
@@ -95,10 +96,11 @@ pub mod prelude {
     pub use crate::dsl::{Adsr, ENGINE_VERSION, Node, SeqNote, SeqWave, SoundDoc, Value};
     pub use crate::instrument::{Instrument, InstrumentDesign, Note};
     pub use crate::patch::Patch;
+    pub use crate::program::{Program, ProgramMeta, ResourceEstimates};
     pub use crate::render::{RenderProduct, render, render_product};
     pub use crate::runtime::{
         AudioSource, Engine, InstanceHandle, Mixer, PatchId, Priority, StreamSource, Tween,
     };
-    pub use crate::song::{Song, note, note_vel};
+    pub use crate::song::{CompileOptions, Song, note, note_vel};
     pub use crate::units::{Beat, Frames, SampleRate, Tempo, beat_to_frames};
 }

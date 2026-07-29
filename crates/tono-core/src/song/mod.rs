@@ -23,6 +23,7 @@
 mod compile;
 mod phrase;
 
+pub use compile::{CompileOptions, CompileTarget};
 pub use phrase::Phrase;
 
 use serde::{Deserialize, Serialize};
