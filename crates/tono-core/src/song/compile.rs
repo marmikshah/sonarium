@@ -1,8 +1,40 @@
 //! Compiling a [`Song`](super::Song) to a deterministic [`SoundDoc`] — the
-//! `tracks` root of `seq` tracks. Length/duration math lives here too.
+//! `tracks` root of `seq` tracks. Length/duration math lives here too, and
+//! [`Song::compile`] — the full validation + lowering entry point that
+//! returns an immutable [`Program`] (ADR 0003).
 
 use super::{Song, SongError, SongTrack};
-use crate::dsl::{ENGINE_VERSION, Node, SeqNote, Track};
+use crate::diag::{CompileError, Diagnostic};
+use crate::dsl::{ENGINE_VERSION, Node, SeqNote, SoundDoc, Track};
+use crate::ids::TrackId;
+use crate::program::{
+    PROGRAM_VERSION, Program, ProgramMeta, ResourceEstimates, TrackMeta, blocker_warnings,
+    content_hash,
+};
+
+/// What a compiled [`Program`] will be used for. In alpha.1 both targets
+/// produce the same artifact — the choice documents intent and surfaces the
+/// same streaming-coverage warnings either way; from alpha.3 the runtime
+/// target gates capability checks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CompileTarget {
+    /// Offline rendering (mix, ranges, stems).
+    #[default]
+    Offline,
+    /// Real-time playback through the runtime engine.
+    Runtime,
+}
+
+/// Knobs for [`Song::compile`]. `Default`: the document's own sample rate
+/// (44 100 Hz), offline target.
+#[derive(Debug, Clone, Default)]
+pub struct CompileOptions {
+    /// Stamp the resolved document with this sample rate (None keeps the
+    /// document default, 44 100 Hz).
+    pub sample_rate: Option<u32>,
+    /// What the program will be used for.
+    pub target: CompileTarget,
+}
 
 /// The reverb room size of a track's send (one shared, musical room).
 const SEND_ROOM: f32 = 0.6;
@@ -195,5 +227,388 @@ impl Song {
             automation: Vec::new(),
             sidechain: None,
         })
+    }
+}
+
+impl Song {
+    /// Compile the song into an immutable, hashed [`Program`] — the central
+    /// validation + lowering entry point (ADR 0003). Validation collects
+    /// every problem in one pass (unknown references, a document that fails
+    /// validation); the returned artifact carries the resolved document,
+    /// musical metadata, bounded resource estimates, streaming-coverage
+    /// warnings, and a canonical content hash that a Python-authored
+    /// equivalent song reproduces exactly.
+    ///
+    /// This API is **experimental** through the 1.10.0 alphas
+    /// (docs/api-tiers.md).
+    ///
+    /// ```
+    /// use tono_core::song::{CompileOptions, Song, note};
+    /// use tono_core::dsl::{Adsr, SeqWave};
+    ///
+    /// let amp = Adsr { a: 0.005, d: 0.1, s: 0.8, r: 0.2, punch: 0.0 };
+    /// let mut song = Song::new("demo", 120.0);
+    /// song.add_track("bass", SeqWave::Bass, amp);
+    /// song.add_pattern("riff", 1, vec![note(0, 4, "C2")]);
+    /// song.arrange("bass", "riff", 0);
+    /// let program = song.compile(&CompileOptions::default()).unwrap();
+    /// assert!(!program.render_mono().is_empty());
+    /// ```
+    pub fn compile(&self, opts: &CompileOptions) -> Result<Program, CompileError> {
+        // One pass, every problem collected — the author fixes one compile,
+        // not a drip-feed of first errors.
+        let mut diags = CompileError::default();
+        if self.tracks.is_empty() {
+            diags.push(Diagnostic::from(&SongError::Empty));
+        }
+        for (i, pl) in self.arrangement.iter().enumerate() {
+            if !self.tracks.iter().any(|t| t.name == pl.track) {
+                let mut d = Diagnostic::from(&SongError::UnknownTrack(pl.track.clone()));
+                d.path = format!("arrangement[{i}].track");
+                diags.push(d);
+            }
+            if !self.patterns.iter().any(|p| p.name == pl.pattern) {
+                let mut d = Diagnostic::from(&SongError::UnknownPattern(pl.pattern.clone()));
+                d.path = format!("arrangement[{i}].pattern");
+                diags.push(d);
+            }
+        }
+        if diags.has_errors() {
+            return Err(diags);
+        }
+
+        let mut doc = match self.to_doc() {
+            Ok(doc) => doc,
+            Err(e) => {
+                diags.push(Diagnostic::from(&e));
+                return Err(diags);
+            }
+        };
+        if let Some(rate) = opts.sample_rate {
+            doc.sample_rate = rate;
+        }
+        if let Some(seed) = self.seed {
+            doc.seed = seed;
+        }
+        if let Err(e) = doc.validate() {
+            diags.push(
+                Diagnostic::error("T2000", "doc", e.to_string())
+                    .with_remediation("fix the flagged document field and recompile"),
+            );
+            return Err(diags);
+        }
+
+        let warnings = blocker_warnings(&doc);
+        let hash = content_hash(&doc);
+        let meta = self.program_meta(&doc);
+        let estimates = program_estimates(&doc);
+        Ok(Program {
+            program_version: PROGRAM_VERSION,
+            schema_version: doc.effective_version(),
+            engine_version: doc.effective_engine(),
+            hash,
+            doc,
+            meta,
+            estimates,
+            warnings,
+        })
+    }
+
+    /// The [`ProgramMeta`] of the resolved document: the musical facts a
+    /// transport needs, captured at compile time.
+    fn program_meta(&self, doc: &SoundDoc) -> ProgramMeta {
+        ProgramMeta {
+            name: doc.name.clone(),
+            tempo_bpm: self.bpm.max(1.0),
+            beats_per_bar: self.beats_per_bar.max(1),
+            steps_per_beat: self.steps_per_beat.max(1),
+            length_bars: self.length_bars(),
+            duration_secs: doc.duration,
+            duration_frames: duration_frames(doc),
+            sample_rate: doc.sample_rate,
+            tracks: self
+                .tracks
+                .iter()
+                .enumerate()
+                .map(|(i, t)| TrackMeta {
+                    id: TrackId::from(i as u64 + 1),
+                    name: t.name.clone(),
+                    wave: t.wave,
+                    notes: track_note_count(doc, i),
+                    mute: t.mute,
+                    solo: t.solo,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The total frame count of a resolved document's render.
+fn duration_frames(doc: &SoundDoc) -> u64 {
+    (doc.duration * doc.sample_rate as f32).round().max(0.0) as u64
+}
+
+/// The (start, end) steps of every note of one compiled track — direct notes
+/// plus placements, as rendered. `None` for a track that isn't seq-backed.
+fn track_note_spans(doc: &SoundDoc, index: usize) -> Option<Vec<(u32, u32)>> {
+    let Node::Tracks { tracks, .. } = &doc.root else {
+        return None;
+    };
+    let node = &tracks.get(index)?.node;
+    let seq = match node {
+        Node::Seq { notes, .. } => {
+            return Some(notes.iter().map(|n| (n.step, note_end(n))).collect());
+        }
+        Node::Chain { stages } => match stages.first() {
+            Some(Node::Seq { notes, .. }) => notes,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(seq.iter().map(|n| (n.step, note_end(n))).collect())
+}
+
+/// How many notes a compiled track plays (for [`TrackMeta`]).
+fn track_note_count(doc: &SoundDoc, index: usize) -> u32 {
+    track_note_spans(doc, index).map_or(0, |v| v.len() as u32)
+}
+
+/// The largest number of notes sounding at once within one track. Steps are
+/// half-open intervals [start, end): at a shared position an ending note is
+/// gone before the next starts (the sort applies −1 deltas before +1).
+fn peak_overlap(mut spans: Vec<(u32, u32)>) -> u32 {
+    let mut points: Vec<(u32, i64)> = Vec::with_capacity(spans.len() * 2);
+    for (start, end) in spans.drain(..) {
+        points.push((start, 1));
+        points.push((end, -1));
+    }
+    points.sort();
+    let mut current = 0i64;
+    let mut peak = 0i64;
+    for (_, delta) in points {
+        current += delta;
+        peak = peak.max(current);
+    }
+    peak.max(0) as u32
+}
+
+/// Bounded estimates of what the resolved document costs to render or run.
+fn program_estimates(doc: &SoundDoc) -> ResourceEstimates {
+    let mut events = 0u64;
+    let mut peak_voices = 0u32;
+    if let Node::Tracks { tracks, .. } = &doc.root {
+        for i in 0..tracks.len() {
+            if let Some(spans) = track_note_spans(doc, i) {
+                events += spans.len() as u64;
+                // Tracks all start at the song's head, so their per-track
+                // peaks can coincide — summing them is the safe upper bound.
+                peak_voices = peak_voices.saturating_add(peak_overlap(spans));
+            }
+        }
+    }
+    let frames = duration_frames(doc);
+    ResourceEstimates {
+        frames,
+        events,
+        peak_voices,
+        memory_bytes: frames.saturating_mul(8),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dsl::{Adsr, SeqWave};
+    use crate::song::note;
+
+    fn amp() -> Adsr {
+        Adsr {
+            a: 0.005,
+            d: 0.1,
+            s: 0.8,
+            r: 0.2,
+            punch: 0.0,
+        }
+    }
+
+    fn demo_song() -> Song {
+        let mut song = Song::new("demo", 120.0);
+        song.add_track("bass", SeqWave::Bass, amp());
+        song.add_track("keys", SeqWave::Epiano, amp());
+        song.add_pattern("riff", 1, vec![note(0, 4, "C2"), note(8, 4, "G2")]);
+        song.add_pattern("stab", 1, vec![note(4, 2, "C4")]);
+        song.arrange("bass", "riff", 0);
+        song.arrange("keys", "stab", 0);
+        song
+    }
+
+    #[test]
+    fn compile_collects_every_unknown_reference_in_one_pass() {
+        let mut song = Song::new("s", 120.0);
+        song.add_track("t", SeqWave::Sine, amp());
+        song.arrange("nope", "ghost", 0);
+        song.arrange("alsono", "ghost2", 1);
+        let err = song.compile(&CompileOptions::default()).unwrap_err();
+        let codes: Vec<_> = err.0.iter().map(|d| (d.code, d.path.as_str())).collect();
+        assert_eq!(
+            codes,
+            vec![
+                ("T1001", "arrangement[0].track"),
+                ("T1002", "arrangement[0].pattern"),
+                ("T1001", "arrangement[1].track"),
+                ("T1002", "arrangement[1].pattern"),
+            ],
+            "every bad reference reported, with its exact path"
+        );
+    }
+
+    #[test]
+    fn compile_an_empty_song_is_t1000() {
+        let song = Song::new("s", 120.0);
+        let err = song.compile(&CompileOptions::default()).unwrap_err();
+        assert_eq!(err.0.len(), 1);
+        assert_eq!(err.0[0].code, "T1000");
+    }
+
+    #[test]
+    fn compile_is_deterministic() {
+        let a = demo_song().compile(&CompileOptions::default()).unwrap();
+        let b = demo_song().compile(&CompileOptions::default()).unwrap();
+        assert_eq!(a.hash, b.hash);
+        assert_eq!(a.render_mono(), b.render_mono());
+    }
+
+    #[test]
+    fn the_seed_stamps_the_doc_and_moves_the_hash() {
+        let plain = demo_song().compile(&CompileOptions::default()).unwrap();
+        assert_eq!(plain.doc.seed, 0);
+        let seeded = demo_song()
+            .with_seed(7)
+            .compile(&CompileOptions::default())
+            .unwrap();
+        assert_eq!(seeded.doc.seed, 7);
+        assert_ne!(plain.hash, seeded.hash, "the seed is part of the artifact");
+        // And stays deterministic per seed.
+        let again = demo_song()
+            .with_seed(7)
+            .compile(&CompileOptions::default())
+            .unwrap();
+        assert_eq!(seeded.hash, again.hash);
+    }
+
+    #[test]
+    fn mute_and_solo_reach_the_mixer() {
+        let mut song = demo_song();
+        song.tracks[1].solo = true;
+        let program = song.compile(&CompileOptions::default()).unwrap();
+        let Node::Tracks { tracks, .. } = &program.doc.root else {
+            panic!("tracks root");
+        };
+        assert!(tracks[0].mute, "the non-solo track is muted");
+        assert!(!tracks[1].mute, "the solo track sounds");
+        // A muted solo track stays muted.
+        let mut song = demo_song();
+        song.tracks[1].solo = true;
+        song.tracks[1].mute = true;
+        let program = song.compile(&CompileOptions::default()).unwrap();
+        let Node::Tracks { tracks, .. } = &program.doc.root else {
+            panic!("tracks root");
+        };
+        assert!(tracks[1].mute);
+    }
+
+    #[test]
+    fn compile_option_sample_rate_stamps_the_program() {
+        let program = demo_song()
+            .compile(&CompileOptions {
+                sample_rate: Some(48_000),
+                ..CompileOptions::default()
+            })
+            .unwrap();
+        assert_eq!(program.doc.sample_rate, 48_000);
+        assert_eq!(program.meta.sample_rate, 48_000);
+    }
+
+    #[test]
+    fn a_tracks_root_warns_it_does_not_stream_natively() {
+        let program = demo_song().compile(&CompileOptions::default()).unwrap();
+        assert!(!program.is_streamable());
+        assert!(
+            program.warnings.iter().any(|d| d.code == "T1504"),
+            "the tracks-root blocker is a warning, not a failure: {:?}",
+            program.warnings
+        );
+        assert!(
+            program
+                .warnings
+                .iter()
+                .all(|d| d.severity == crate::diag::Severity::Warning),
+            "warnings never fail a compile"
+        );
+    }
+
+    #[test]
+    fn an_invalid_resolved_doc_is_t2000() {
+        // A sampler track without a SoundFont path resolves but fails
+        // document validation at compile.
+        let mut song = Song::new("s", 120.0);
+        song.add_track("keys", SeqWave::Sampler, amp());
+        song.tracks[0].notes.push(note(0, 4, "C4"));
+        let err = song.compile(&CompileOptions::default()).unwrap_err();
+        assert_eq!(err.0.len(), 1);
+        assert_eq!(err.0[0].code, "T2000");
+        assert_eq!(err.0[0].path, "doc");
+    }
+
+    #[test]
+    fn meta_preserves_the_musical_facts() {
+        let program = demo_song().compile(&CompileOptions::default()).unwrap();
+        assert_eq!(program.meta.name, "demo");
+        assert_eq!(program.meta.tempo_bpm, 120.0);
+        assert_eq!(program.meta.length_bars, 1);
+        assert_eq!(program.meta.tracks.len(), 2);
+        assert_eq!(program.meta.tracks[0].id.get(), 1);
+        assert_eq!(program.meta.tracks[1].id.get(), 2);
+        assert_eq!(program.meta.tracks[0].name, "bass");
+        assert_eq!(program.meta.tracks[0].notes, 2);
+        assert_eq!(
+            program.meta.duration_frames,
+            (program.doc.duration * program.doc.sample_rate as f32).round() as u64
+        );
+    }
+
+    #[test]
+    fn estimates_count_events_and_peak_voices() {
+        let mut song = Song::new("s", 120.0);
+        song.add_track("chords", SeqWave::Organ, amp());
+        // Three overlapping notes (a chord) plus a later single.
+        song.tracks[0].notes.push(note(0, 8, "C4"));
+        song.tracks[0].notes.push(note(0, 8, "E4"));
+        song.tracks[0].notes.push(note(0, 8, "G4"));
+        song.tracks[0].notes.push(note(8, 4, "A4"));
+        let program = song.compile(&CompileOptions::default()).unwrap();
+        assert_eq!(program.estimates.events, 4);
+        assert_eq!(program.estimates.peak_voices, 3, "the chord is 3 voices");
+    }
+
+    #[test]
+    fn peak_overlap_treats_ends_as_half_open() {
+        assert_eq!(
+            peak_overlap(vec![(0, 4), (4, 8)]),
+            1,
+            "back-to-back, never 2"
+        );
+        assert_eq!(peak_overlap(vec![(0, 5), (4, 8)]), 2, "one step of overlap");
+        assert_eq!(peak_overlap(vec![]), 0);
+    }
+
+    #[test]
+    fn program_renders_stereo_matching_the_doc() {
+        let program = demo_song().compile(&CompileOptions::default()).unwrap();
+        let (l, r) = program.render_stereo();
+        let product = crate::render::render_product(&program.doc);
+        let (el, er) = product.stereo.unwrap();
+        assert_eq!(l, el);
+        assert_eq!(r, er);
     }
 }
