@@ -30,6 +30,28 @@
   tail); it now drains the exact tail once the producer is finished.
 
 ### Added
+- **`Transport` — the sample-accurate musical clock** (alpha.3,
+  experimental): position in frames with exact conversions to beats and
+  bars through the program's tempo/meter maps and pickup (the same shared
+  walks the compiler uses); play/pause/stop, seeks by frame/beat/bar, and
+  loop ranges that wrap at the boundary or stop at the program end.
+- **`Performance` — the scheduled runtime for a compiled Program**
+  (alpha.3, experimental): transport + a bounded, submission-ordered
+  command queue executing at exact frames — the host never wakes on a
+  musical boundary. Playback is native streaming for schema-v2 tracks
+  programs (byte-identical to the bounce), the pre-rendered bounce
+  otherwise. Commands: play/pause/stop, seeks by frame/beat/bar/section,
+  loop ranges, ramped master gain, stingers (loaded at schedule time),
+  and crossfaded program swaps whose rejected targets keep the last valid
+  program. A full queue rejects and counts; metrics read off the audio
+  callback with no allocation on it; command capture + replay reproduces
+  a take bit-for-bit; section transitions quantize with latest-wins
+  interruption; snapshots restore control state deterministically.
+- **`tono.Performance` (Python)** — the same runtime surface, live
+  (speakers, on the Engine's pump architecture, with all control off the
+  audio callback) or `headless=True` for tests and servers
+  (`.fill(frames)` renders manually with the GIL released); scheduling
+  via `tono.next_bar()`-style helpers.
 - **The streaming mixer** (alpha.3): schema-v2 `tracks` roots now stream
   natively, byte-identical to the offline bounce at any block size — every
   track's graph, per-sample pan/gain with automation lanes (linear/step/exp),

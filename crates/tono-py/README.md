@@ -39,6 +39,22 @@ audio = program.render()                      # np.float32, shape (frames, 2), L
 `Voice` builders (`.gain(..).pan(..).reverb(..).swing(..).humanize(..)`) chain;
 `program.save(path)` / `tono.Program.load(path)` ship the hashed bundle.
 
+## Running a program — `tono.Performance`
+
+```python
+with tono.Performance(program, headless=True) as perf:   # or headless=False for speakers
+    perf.play()
+    perf.set_gain(0.8, at=tono.next_bar())
+    perf.transition("chorus", at=tono.next_bar())        # a named section
+    audio = perf.fill(program.sample_rate * 10)          # stereo (frames, 2), float32
+    print(perf.metrics())                                # frames, commands, queue depth, …
+```
+
+Commands schedule at frames, beats, bars, markers, sections, `tono.next_beat()`,
+or `tono.next_bar()` — and execute at exact frames, never waiting on Python
+to wake up. Seeks, loops, crossfaded swaps, stingers, capture/replay, and
+snapshots work the same in both modes.
+
 ## Build from source
 
 Never published to PyPI (the name is taken) — build it here:
