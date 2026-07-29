@@ -39,7 +39,10 @@
   level, byte-for-byte the `duck` node's envelope math). Validation rejects
   unknown sources, self-follows, and follower-of-follower chains; a muted
   source ducks nothing; `amount: 0` and absent fields render bit-identically
-  to before. Deterministic regardless of declaration order.
+  to before. Deterministic regardless of declaration order. Offline-only for
+  now, like every `tracks` root: live playback goes through the
+  buffer-backed `Player`/`Engine` fallback until the runtime mixer streams
+  tracks (a `duck` node remains the way to pump in a streamed graph).
 - **New `wavetable` node** — a morphing wavetable oscillator with four
   built-in deterministically generated table sets (`basic`, `harmonics`,
   `formant`, `metallic`): a modulatable `position` morphs across each set.

@@ -410,7 +410,11 @@ uses, so the pump character matches. The source renders untouched; only the
 follower dips, and it ducks when the source actually lands on the bus (the
 source's `at` offset is honored). Several tracks may follow one source, but a
 source must be a plain track (no follower-of-follower chains — duck directly
-to the source's source):
+to the source's source). Sidechaining is **offline-only** for now: the
+streaming renderer doesn't stream a `tracks` root at all (it reports
+`StreamBlocker::TracksRoot`), so a sidechained mix plays live only through
+the buffer-backed `Player`/`Engine` fallback — render once, then play. To pump
+in a natively streamed sound, use a `duck` node inside the graph instead:
 ```json
 { "name": "pump", "duration": 2.0, "version": 2, "root": { "type": "tracks", "tracks": [
     { "id": "kick", "node": { "type": "seq", "bpm": 120, "steps_per_beat": 1, "wave": "sine",
