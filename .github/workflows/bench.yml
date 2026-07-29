@@ -7,7 +7,8 @@ name: Bench
 # are their own workstream).
 
 on:
-  pull_request:
+  push:
+    branches: [master]
     paths:
       - "crates/tono-core/**"
       - ".github/workflows/bench.yml"

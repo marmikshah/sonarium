@@ -1,0 +1,11 @@
+# Declared repository-policy exceptions.
+
+[[exempt]]
+check  = "lib.no-lockfile"
+reason = "This workspace also ships the tono CLI binary; the v1.10 roadmap (issue #52, WS9) mandates committing the lockfile and resolving CI/releases with --locked for reproducible builds."
+until  = "2027-01-29"
+
+[[exempt]]
+check  = "scripts.inside-tools"
+reason = "The Python test suite lives with its package (crates/tono-py/tests), the ecosystem-standard home for tests; the Makefile's python-test/python-smoke targets are the CI invocation of that suite, not ad-hoc scripts."
+until  = "2027-01-29"

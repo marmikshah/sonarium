@@ -1,60 +1,33 @@
 name: CI
 
+# One PR gate, one job, one command: `make ci` (fmt --check + clippy
+# (-D warnings) + tests) — the exact thing the pre-push hook runs, so a
+# pushed head has already proven it locally. Runs on non-draft PRs and on
+# master. Everything heavier (macOS native crates, Python wheel smoke,
+# benches, the wasm build) is validated on master pushes via their own
+# workflows, not per-PR — hosted minutes are spent where they change
+# outcomes.
+
 on:
   push:
     branches: [master]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-test:
-    # Both pinned golden-corpus platforms: the per-platform render hashes
-    # (macos-aarch64 vs linux-x86_64) must each be CI-validated. The pinned
-    # production toolchain comes from rust-toolchain.toml (1.88.0).
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  ci:
+    if: github.event.pull_request.draft == false
+    # The pinned production toolchain comes from rust-toolchain.toml (1.88.0);
+    # the golden corpus's per-platform pins (engine ≤ 4) are validated on this
+    # runner's matching platform only — ubuntu-linux covers the linux set, the
+    # macOS set is covered by the Native workflow on master.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
       - name: Verify
-        # The one gate — identical to the pre-push hook and `make verify`.
-        run: make verify
+      - run: make ci
 
-  stable-compat:
-    # The future, tested separately from the pinned production toolchain:
-    # latest stable, so an upstream regression or a stabilization we rely on
-    # surfaces early instead of on release day. RUSTUP_TOOLCHAIN overrides
-    # the rust-toolchain.toml pin for this job only.
-    runs-on: ubuntu-latest
-    env:
-      RUSTUP_TOOLCHAIN: stable
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: Verify on latest stable
-        run: make verify
-
-  build-wasm:
-    # The WASM face on the fast path: build-only (no browser tests, keeping
-    # the fast path fast). Compiling tono-core + tono-wasm to the supported
-    # wasm32 target on every push/PR is what covers core/runtime changes for
-    # the browser face — per-job path filters aren't a house pattern (the
-    # Native workflow gates at the workflow level instead), and this job is
-    # cheap enough to always run.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - name: Build the WASM face
-        run: cargo build --locked -p tono-wasm --target wasm32-unknown-unknown
