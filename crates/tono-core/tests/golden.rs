@@ -372,6 +372,22 @@ const CORPUS: &[Case] = &[
         mac: (0xcc7cf5e7ed38019f, None),
         linux: Some((0x405eda555be5a8d1, None)),
     },
+    Case {
+        // A tempo change mid-sequence: segment-wise exact placement (ADR 0002).
+        name: "seq-tempo-map",
+        json: r#"{ "name": "seq-tempo-map", "duration": 2.5, "version": 2, "engine": 4,
+            "root": { "type": "seq", "bpm": 120, "wave": "square",
+                "tempo_map": [ { "at": { "num": 0, "den": 1 }, "bpm": 120 },
+                               { "at": { "num": 4, "den": 1 }, "bpm": 90 } ],
+                "env": { "a": 0.005, "d": 0.05, "s": 0.6, "r": 0.08 },
+                "notes": [
+                    { "step": 0, "len": 2, "pitch": "C4" },
+                    { "step": 8, "len": 2, "pitch": "E4" },
+                    { "step": 16, "len": 2, "pitch": "G4" },
+                    { "step": 24, "len": 4, "pitch": "C5", "gain": 0.8 } ] } }"#,
+        mac: (0x93bbbd9fe2057929, None),
+        linux: None,
+    },
 ];
 
 /// Song fluent path golden: the arrangement layer compiles through `to_doc`

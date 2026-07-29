@@ -5,7 +5,7 @@ use super::kit::{cowbell_sample, kit_drum};
 use super::{Signal, adsr, eval_value, osc, poly_blep};
 use crate::dsl::{
     Adsr, BassKnobs, FmKnobs, KitStyle, Node, PianoKnobs, PluckKnobs, SeqNote, SeqWave, Shape,
-    Value,
+    TempoPoint, Value,
 };
 use crate::dsp::Rng;
 use std::f32::consts::TAU;
@@ -30,6 +30,8 @@ pub(super) struct SeqVoice<'a> {
     pub(super) swing: f32,
     pub(super) humanize: f32,
     pub(super) env: &'a Adsr,
+    /// The seq's tempo map (empty = constant tempo, the legacy f32 path).
+    pub(super) tempo_map: &'a [TempoPoint],
     /// The document's engine revision — gates byte-changing voice upgrades
     /// (e.g. the engine-3 inharmonic `piano`).
     pub(super) engine: u32,
@@ -45,6 +47,7 @@ impl<'a> SeqVoice<'a> {
     ) -> Option<(SeqVoice<'a>, f32, u32, &'a [SeqNote])> {
         let Node::Seq {
             bpm,
+            tempo_map,
             steps_per_beat,
             wave,
             duty,
@@ -76,6 +79,7 @@ impl<'a> SeqVoice<'a> {
             swing: *swing,
             humanize: *humanize,
             env,
+            tempo_map,
             engine,
         };
         Some((voice, *bpm, *steps_per_beat, notes))
@@ -106,6 +110,23 @@ const HUMANIZE_VELOCITY_FRACTION: f32 = 0.15;
 /// PINNED: the humanize golden hashes depend on it.
 const HUMANIZE_SEED_SALT: u64 = 0x6A09_E667;
 
+/// The two per-note humanize draws (timing and velocity), seeded from the
+/// note's identity so the jitter is stable per note. Callers scale them by
+/// their own step duration — the constant-tempo path in f32, the tempo-map
+/// path in f64 — while sharing these exact draws.
+fn humanize_draws(note: &SeqNote, engine: u32) -> (f32, f32) {
+    let mut seed = (note.step as u64) << 32 ^ (note.len as u64) << 8 ^ HUMANIZE_SEED_SALT;
+    if engine >= 4 {
+        // Chord-aware: seeded from (step, len) alone, every note of a
+        // chord shared one timing/velocity offset and moved as a block —
+        // a human never does that. Engine ≤ 3 keeps the shared seed
+        // bit-for-bit.
+        seed ^= pitch_identity(&note.pitch).rotate_left(17);
+    }
+    let mut hr = Rng::new(seed);
+    (hr.bi(), hr.bi())
+}
+
 /// Groove placement for one note: its start sample (swing + humanize timing)
 /// and its humanized gain.
 fn groove_note(note: &SeqNote, voice: &SeqVoice, step_dur: f32) -> (usize, f32) {
@@ -118,25 +139,80 @@ fn groove_note(note: &SeqNote, voice: &SeqVoice, step_dur: f32) -> (usize, f32) 
         0.0
     };
     let (human_delay, gain) = if voice.humanize > 0.0 {
-        // Seed from the note's identity so the jitter is stable per note.
-        let mut seed = (note.step as u64) << 32 ^ (note.len as u64) << 8 ^ HUMANIZE_SEED_SALT;
-        if voice.engine >= 4 {
-            // Chord-aware: seeded from (step, len) alone, every note of a
-            // chord shared one timing/velocity offset and moved as a block —
-            // a human never does that. Engine ≤ 3 keeps the shared seed
-            // bit-for-bit.
-            seed ^= pitch_identity(&note.pitch).rotate_left(17);
-        }
-        let mut hr = Rng::new(seed);
+        let (timing_draw, gain_draw) = humanize_draws(note, voice.engine);
         (
-            voice.humanize * HUMANIZE_TIMING_STEP_FRACTION * step_dur * hr.bi(),
-            note.gain * (1.0 + voice.humanize * HUMANIZE_VELOCITY_FRACTION * hr.bi()),
+            voice.humanize * HUMANIZE_TIMING_STEP_FRACTION * step_dur * timing_draw,
+            note.gain * (1.0 + voice.humanize * HUMANIZE_VELOCITY_FRACTION * gain_draw),
         )
     } else {
         (0.0, note.gain)
     };
     let start = (note.step as f32 * step_dur + swing_delay + human_delay).max(0.0) as usize;
     (start, gain.clamp(0.0, 1.0))
+}
+
+/// Segment-wise tempo-map timing (ADR 0002): beats convert to seconds in
+/// f64, segment by segment, and cross to frames once with halves rounded
+/// away from zero. Notes spanning a tempo change keep their musical length.
+/// The walk itself is shared ([`crate::dsl::tempo_map_seconds_at`]) so the
+/// renderer and the compiler can never disagree.
+struct TempoMap<'a> {
+    points: &'a [TempoPoint],
+}
+
+impl TempoMap<'_> {
+    /// Seconds elapsed at `beat` — the segment walk.
+    fn seconds_at(&self, beat: f64) -> f64 {
+        crate::dsl::tempo_map_seconds_at(self.points, beat)
+    }
+
+    /// The tempo in effect at `beat` (the local step duration derives from it).
+    fn bpm_at(&self, beat: f64) -> f64 {
+        crate::dsl::tempo_map_bpm_at(self.points, beat)
+    }
+}
+
+/// Where a note stops, in steps (the same floor the legacy path applies).
+fn note_end_step(n: &SeqNote) -> u32 {
+    n.step.saturating_add(n.len.max(1))
+}
+
+/// Groove placement under a tempo map: the same swing/humanize math as
+/// [`groove_note`], scaled by the LOCAL step duration at the note's start,
+/// with the final frame rounded halves-away-from-zero (the ADR rule).
+fn groove_note_mapped(
+    note: &SeqNote,
+    voice: &SeqVoice,
+    map: &TempoMap,
+    steps_per_beat: u32,
+    sr: u32,
+) -> (usize, usize, f32) {
+    let spb = steps_per_beat as f64;
+    let start_beat = note.step as f64 / spb;
+    let local_step_secs = 60.0 / map.bpm_at(start_beat) / spb;
+    let local_step_frames = local_step_secs * sr as f64;
+    let swing_delay = if note.step % 2 == 1 {
+        voice.swing as f64 * SWING_MAX_STEP_FRACTION as f64 * local_step_frames
+    } else {
+        0.0
+    };
+    let (human_delay, gain) = if voice.humanize > 0.0 {
+        let (timing_draw, gain_draw) = humanize_draws(note, voice.engine);
+        (
+            voice.humanize as f64
+                * HUMANIZE_TIMING_STEP_FRACTION as f64
+                * local_step_frames
+                * timing_draw as f64,
+            note.gain * (1.0 + voice.humanize * HUMANIZE_VELOCITY_FRACTION * gain_draw),
+        )
+    } else {
+        (0.0, note.gain)
+    };
+    let start_frames = map.seconds_at(start_beat) * sr as f64 + swing_delay + human_delay;
+    let start = start_frames.round().max(0.0) as usize;
+    let end_beat = note_end_step(note) as f64 / spb;
+    let end = (map.seconds_at(end_beat) * sr as f64).round().max(0.0) as usize;
+    (start, end, gain.clamp(0.0, 1.0))
 }
 
 /// Render a note sequence: each note is an instrument voice with its own
@@ -163,6 +239,11 @@ fn render_seq(
     if voice.wave == SeqWave::Sampler {
         return vec![0.0f32; n];
     }
+    // A tempo map retimes the grid segment-wise (ADR 0002). An empty map is
+    // the legacy constant-tempo path below — byte-identical by construction.
+    if !voice.tempo_map.is_empty() {
+        return render_seq_mapped(steps_per_beat, voice, notes, n, sr, rng);
+    }
     let mut out = vec![0.0f32; n];
     for note in notes {
         let (start, gain) = groove_note(note, voice, step_dur);
@@ -174,6 +255,43 @@ fn render_seq(
         // (f32→usize saturates, so even an inf product stays capped by n.)
         let len = ((note.len as f32 * step_dur).min(n as f32) as usize).max(1);
         let avail = (n - start).min(len);
+        let envb = adsr(voice.env, len, sr);
+        let f = eval_value(&note.pitch, len, sr);
+        let d = eval_value(voice.duty, len, sr);
+        let sig = seq_note_signal(voice, note, &f[..avail], &d[..avail], sr, rng);
+        for (i, s) in sig.into_iter().enumerate() {
+            out[start + i] += s * envb[i] * gain;
+        }
+    }
+    out
+}
+
+/// Render a note sequence whose tempo map retimes the grid: per-note
+/// placement through [`groove_note_mapped`], otherwise the exact same
+/// synthesis as [`render_seq`].
+fn render_seq_mapped(
+    steps_per_beat: u32,
+    voice: &SeqVoice,
+    notes: &[SeqNote],
+    n: usize,
+    sr: u32,
+    rng: &mut Rng,
+) -> Signal {
+    let map = TempoMap {
+        points: voice.tempo_map,
+    };
+    let mut out = vec![0.0f32; n];
+    for note in notes {
+        let (start, end, gain) = groove_note_mapped(note, voice, &map, steps_per_beat, sr);
+        if start >= n {
+            continue;
+        }
+        // Bound the note length by the render window before allocating, like
+        // the legacy path — a huge note.len must not size buffers. The
+        // envelope shapes for the window-capped length and the output
+        // truncates to what's audible, exactly as the legacy path does.
+        let len = end.saturating_sub(start).max(1).min(n);
+        let avail = len.min(n - start);
         let envb = adsr(voice.env, len, sr);
         let f = eval_value(&note.pitch, len, sr);
         let d = eval_value(voice.duty, len, sr);

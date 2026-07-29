@@ -13,7 +13,7 @@ fn parse(json: &str) -> SoundDoc {
 
 /// Assert a doc streams byte-for-byte identical to the offline graph, in one
 /// block and split across several block sizes.
-fn assert_byte_identical(doc: &SoundDoc) {
+pub(crate) fn assert_byte_identical(doc: &SoundDoc) {
     let offline = render_graph(doc);
     let mut sg = StreamGraph::try_from_doc(doc).expect("should be streamable");
     let mut whole = vec![0.0f32; offline.len()];

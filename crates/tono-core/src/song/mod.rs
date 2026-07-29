@@ -108,6 +108,44 @@ pub struct Placement {
     pub bar: u32,
 }
 
+/// A time-signature change at a bar (0-based), for the meter map: from `bar`
+/// until the next change, a bar is `numerator`/`denominator` long. In the
+/// song's beat grid a bar is `numerator × (4 / denominator)` quarter-note
+/// beats (6/8 = 3, 3/4 = 3, 4/4 = 4). Denominators must be powers of two.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MeterPoint {
+    /// The bar the change takes effect at (0-based). The first point must be
+    /// bar 0 when a meter map is present.
+    pub bar: u32,
+    /// Beats per bar (the time-signature numerator).
+    pub numerator: u32,
+    /// The note value one beat is written in (4 = quarter, 8 = eighth).
+    pub denominator: u32,
+}
+
+/// A named range of bars — a verse, a chorus, a build. Sections are musical
+/// metadata: they render nothing themselves, but they are compiled into the
+/// Program so the runtime can quantize transitions to them (ADR 0003/0005).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Section {
+    /// The section name (`"verse"`, `"chorus"`).
+    pub name: String,
+    /// The bar it starts at (0-based).
+    pub bar: u32,
+    /// Its length in bars.
+    pub bars: u32,
+}
+
+/// A named point on the musical timeline — a hit, a cue, a drop. Like
+/// sections, markers are metadata compiled into the Program.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Marker {
+    /// The marker name.
+    pub name: String,
+    /// Its exact beat position.
+    pub at: crate::units::Beat,
+}
+
 /// A full song: tracks (instruments), patterns (phrases), and an arrangement
 /// (where each pattern plays). Serializable, so a song is a saveable project.
 #[non_exhaustive]
@@ -129,6 +167,26 @@ pub struct Song {
     /// Humanize, 0..1 (deterministic timing/velocity jitter), applied to every track.
     #[serde(default)]
     pub humanize: f32,
+    /// Tempo changes at exact beat positions (ADR 0002). Empty = the constant
+    /// `bpm` — the only behavior pre-existing songs had, so they compile
+    /// byte-identically. The first point must sit at beat 0.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tempo_map: Vec<crate::dsl::TempoPoint>,
+    /// Time-signature changes by bar. Empty = `beats_per_bar`/4 throughout.
+    /// The first point must be bar 0 when present.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub meter_map: Vec<MeterPoint>,
+    /// Pickup (anacrusis): bar 0's length in beats when it isn't a full bar.
+    /// None = bar 0 is full length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pickup: Option<crate::units::Beat>,
+    /// Named ranges of bars (verse/chorus/…) — metadata compiled into the
+    /// Program for the runtime's quantized transitions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<Section>,
+    /// Named points on the timeline — metadata compiled into the Program.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<Marker>,
     /// The instrument tracks.
     pub tracks: Vec<SongTrack>,
     /// The reusable phrases.
@@ -219,6 +277,11 @@ impl Song {
             beats_per_bar: default_beats_per_bar(),
             swing: 0.0,
             humanize: 0.0,
+            tempo_map: Vec::new(),
+            meter_map: Vec::new(),
+            pickup: None,
+            sections: Vec::new(),
+            markers: Vec::new(),
             tracks: Vec::new(),
             patterns: Vec::new(),
             arrangement: Vec::new(),

@@ -3,7 +3,7 @@
 //! [`Song::compile`] — the full validation + lowering entry point that
 //! returns an immutable [`Program`] (ADR 0003).
 
-use super::{Song, SongError, SongTrack};
+use super::{MeterPoint, Song, SongError, SongTrack};
 use crate::diag::{CompileError, Diagnostic};
 use crate::dsl::{ENGINE_VERSION, Node, SeqNote, SoundDoc, Track};
 use crate::ids::TrackId;
@@ -11,6 +11,7 @@ use crate::program::{
     PROGRAM_VERSION, Program, ProgramMeta, ResourceEstimates, TrackMeta, blocker_warnings,
     content_hash,
 };
+use crate::units::Beat;
 
 /// What a compiled [`Program`] will be used for. In alpha.1 both targets
 /// produce the same artifact — the choice documents intent and surfaces the
@@ -68,14 +69,51 @@ impl Song {
             })
             .max()
             .unwrap_or(0);
-        let from_notes = self
-            .tracks
-            .iter()
-            .flat_map(|t| t.notes.iter())
-            .map(|n| note_end(n).div_ceil(steps_per_bar))
-            .max()
-            .unwrap_or(0);
+        let from_notes = if self.plain_meter() {
+            self.tracks
+                .iter()
+                .flat_map(|t| t.notes.iter())
+                .map(|n| note_end(n).div_ceil(steps_per_bar))
+                .max()
+                .unwrap_or(0)
+        } else {
+            self.tracks
+                .iter()
+                .flat_map(|t| t.notes.iter())
+                .map(|n| {
+                    let beat = Beat::new(note_end(n) as i64, self.steps_per_beat.max(1));
+                    self.bar_count_at_beat(beat)
+                })
+                .max()
+                .unwrap_or(0)
+        };
         from_patterns.max(from_notes)
+    }
+
+    /// Bars elapsed at `beat` under the meter map — the bar-count analog of
+    /// `div_ceil` for a plain meter (binary search over the monotonic beat
+    /// walk; saturates at absurd inputs).
+    fn bar_count_at_beat(&self, beat: Beat) -> u32 {
+        if beat <= Beat::zero() {
+            return 0;
+        }
+        let mut lo = 0u32; // beat_at_bar(lo) < beat
+        let mut hi = 1u32; // doubled until beat_at_bar(hi) >= beat
+        while self.beat_at_bar(hi) < beat {
+            hi = hi.saturating_mul(2);
+            if hi == u32::MAX {
+                return hi;
+            }
+        }
+        while lo + 1 < hi {
+            let mid = lo + (hi - lo) / 2;
+            if self.beat_at_bar(mid) < beat {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        hi
     }
 
     /// Steps per bar, degenerate (zero) fields floored to 1 — the one formula
@@ -83,6 +121,87 @@ impl Song {
     /// so a deserialized song can't report a length its compile disagrees with.
     fn steps_per_bar(&self) -> u32 {
         self.beats_per_bar.max(1) * self.steps_per_beat.max(1)
+    }
+
+    /// Whether the meter is plain (`beats_per_bar`/4 throughout, no pickup) —
+    /// the legacy placement path, byte-identical to before the maps existed.
+    fn plain_meter(&self) -> bool {
+        self.meter_map.is_empty() && self.pickup.is_none()
+    }
+
+    /// The meter in effect at `bar` (the last map point at or before it).
+    fn meter_at(&self, bar: u32) -> MeterPoint {
+        let fallback = MeterPoint {
+            bar: 0,
+            numerator: self.beats_per_bar.max(1),
+            denominator: 4,
+        };
+        self.meter_map
+            .iter()
+            .rev()
+            .find(|p| p.bar <= bar)
+            .copied()
+            .unwrap_or(fallback)
+    }
+
+    /// The length of bar `index` in quarter-note beats: the pickup for bar 0
+    /// when set, otherwise the meter in effect (`numerator × 4/denominator`).
+    fn bar_len(&self, index: u32) -> Beat {
+        if index == 0
+            && let Some(pickup) = self.pickup
+        {
+            return pickup;
+        }
+        let meter = self.meter_at(index);
+        Beat::new(meter.numerator as i64 * 4, meter.denominator)
+    }
+
+    /// The exact beat `bar` starts at — the pickup plus the meter walk,
+    /// segment-wise (the map is short, so a pathological bar costs O(map),
+    /// not O(bar)). Saturates rather than wraps at absurd bars.
+    pub fn beat_at_bar(&self, bar: u32) -> Beat {
+        let mut beats = Beat::zero();
+        if bar == 0 {
+            return beats;
+        }
+        // Bar 0 — possibly the pickup bar.
+        beats = beats
+            .checked_add(self.bar_len(0))
+            .unwrap_or(Beat::new(i64::MAX, 1));
+        // Bars 1..bar, walked segment-wise by the meter map.
+        let mut i = 1u32;
+        while i < bar {
+            let seg_end = self
+                .meter_map
+                .iter()
+                .map(|p| p.bar)
+                .filter(|b| *b > i)
+                .min()
+                .unwrap_or(u32::MAX)
+                .min(bar);
+            let span = self
+                .bar_len(i)
+                .scale(i64::from(seg_end - i))
+                .unwrap_or(Beat::new(i64::MAX, 1));
+            beats = beats.checked_add(span).unwrap_or(Beat::new(i64::MAX, 1));
+            i = seg_end;
+        }
+        beats
+    }
+
+    /// A beat position to a grid step, erroring when it lands between steps
+    /// (the grid is the seq's; placements must sit on it).
+    fn beat_to_step(&self, beat: Beat) -> Result<u32, SongError> {
+        let spb = self.steps_per_beat.max(1) as i128;
+        let num = beat.num as i128 * spb;
+        if num % beat.den as i128 != 0 {
+            return Err(SongError::Compile(format!(
+                "a placement at beat {beat} doesn't land on the {}-steps-per-beat \
+                 grid — change steps_per_beat or the meter map/pickup",
+                self.steps_per_beat.max(1)
+            )));
+        }
+        Ok(u32::try_from((num / beat.den as i128).max(0)).unwrap_or(u32::MAX))
     }
 
     /// Compile to a deterministic [`SoundDoc`](crate::dsl::SoundDoc) — a
@@ -109,7 +228,14 @@ impl Song {
             doc_tracks.push(self.compile_track(t, &mut end_step, any_solo)?);
         }
 
-        let duration = end_step as f32 * sec_per_step + 2.0; // tail for release/reverb
+        // With a tempo map, seconds come from the segment walk; without one,
+        // the legacy constant-tempo formula (byte-identical history).
+        let duration = if self.tempo_map.is_empty() {
+            end_step as f32 * sec_per_step + 2.0 // tail for release/reverb
+        } else {
+            let end_beat = end_step as f64 / self.steps_per_beat.max(1) as f64;
+            crate::dsl::tempo_map_seconds_at(&self.tempo_map, end_beat) as f32 + 2.0
+        };
         let root = Node::Tracks {
             tracks: doc_tracks,
             master: self.master.clone(),
@@ -154,7 +280,13 @@ impl Song {
                 .iter()
                 .find(|p| p.name == pl.pattern)
                 .expect("pattern existence checked above");
-            let offset = pl.bar.saturating_mul(steps_per_bar);
+            // Plain meter keeps the legacy integer stride (byte-identical);
+            // maps place bars through the exact beat walk.
+            let offset = if self.plain_meter() {
+                pl.bar.saturating_mul(steps_per_bar)
+            } else {
+                self.beat_to_step(self.beat_at_bar(pl.bar))?
+            };
             for n in &pat.notes {
                 let placed = SeqNote {
                     step: n.step.saturating_add(offset),
@@ -197,6 +329,12 @@ impl Song {
                     seq_json[key] = val;
                 }
             }
+        }
+        // The song's tempo map applies to every track's seq (the grid is
+        // shared); empty maps omit the field, so plain songs are unchanged.
+        if !self.tempo_map.is_empty() {
+            seq_json["tempo_map"] = serde_json::to_value(&self.tempo_map)
+                .map_err(|e| SongError::Compile(e.to_string()))?;
         }
         let seq: Node = serde_json::from_value(seq_json)
             .map_err(|e| SongError::Compile(format!("track '{}' seq build: {e}", t.name)))?;
@@ -277,6 +415,11 @@ impl Song {
             return Err(diags);
         }
 
+        self.validate_maps(&mut diags);
+        if diags.has_errors() {
+            return Err(diags);
+        }
+
         let mut doc = match self.to_doc() {
             Ok(doc) => doc,
             Err(e) => {
@@ -314,14 +457,185 @@ impl Song {
         })
     }
 
+    /// Validate the tempo/meter maps, pickup, grid placement, and
+    /// sections/markers — one pass, every problem collected (T1003–T1006).
+    fn validate_maps(&self, diags: &mut CompileError) {
+        // The tempo map (T1003): first at beat 0, strictly ascending, sane
+        // tempos, bounded (mirrors the document-level seq validation).
+        let map = &self.tempo_map;
+        if map.len() > 1024 {
+            diags.push(
+                Diagnostic::error(
+                    "T1003",
+                    "tempo_map",
+                    format!("tempo_map is capped at 1024 points, got {}", map.len()),
+                )
+                .with_remediation("split the piece or thin the tempo changes"),
+            );
+        }
+        if let Some(first) = map.first()
+            && first.at != Beat::zero()
+        {
+            diags.push(
+                Diagnostic::error("T1003", "tempo_map[0].at", "tempo_map's first point must be at beat 0")
+                    .with_remediation("add a point at beat 0 (the song's bpm applies before the first change otherwise)"),
+            );
+        }
+        for (i, p) in map.iter().enumerate() {
+            if !(p.bpm.is_finite() && p.bpm > 0.0) {
+                diags.push(
+                    Diagnostic::error(
+                        "T1003",
+                        format!("tempo_map[{i}].bpm"),
+                        format!("tempo must be positive and finite, got {}", p.bpm),
+                    )
+                    .with_remediation("set a tempo above 0 BPM"),
+                );
+            }
+            if i > 0 && p.at <= map[i - 1].at {
+                diags.push(
+                    Diagnostic::error(
+                        "T1003",
+                        format!("tempo_map[{i}].at"),
+                        "tempo_map must be strictly ascending by beat",
+                    )
+                    .with_remediation("sort the changes and merge any duplicates"),
+                );
+            }
+        }
+        // The meter map (T1004): first at bar 0, ascending bars, numerator ≥ 1,
+        // power-of-two denominator, bounded.
+        let meter = &self.meter_map;
+        if meter.len() > 256 {
+            diags.push(
+                Diagnostic::error(
+                    "T1004",
+                    "meter_map",
+                    format!("meter_map is capped at 256 points, got {}", meter.len()),
+                )
+                .with_remediation("consolidate repeated time-signature changes"),
+            );
+        }
+        if let Some(first) = meter.first()
+            && first.bar != 0
+        {
+            diags.push(
+                Diagnostic::error(
+                    "T1004",
+                    "meter_map[0].bar",
+                    "meter_map's first point must be at bar 0",
+                )
+                .with_remediation("add the opening time signature at bar 0"),
+            );
+        }
+        for (i, p) in meter.iter().enumerate() {
+            if p.numerator < 1 {
+                diags.push(
+                    Diagnostic::error(
+                        "T1004",
+                        format!("meter_map[{i}].numerator"),
+                        "time-signature numerator must be ≥ 1",
+                    )
+                    .with_remediation("use a numerator like 3 (3/4) or 6 (6/8)"),
+                );
+            }
+            if !p.denominator.is_power_of_two() || p.denominator > 64 {
+                diags.push(
+                    Diagnostic::error(
+                        "T1004",
+                        format!("meter_map[{i}].denominator"),
+                        format!(
+                            "time-signature denominator must be a power of two ≤ 64, got {}",
+                            p.denominator
+                        ),
+                    )
+                    .with_remediation("use 2, 4, 8, 16, 32, or 64"),
+                );
+            }
+            if i > 0 && p.bar <= meter[i - 1].bar {
+                diags.push(
+                    Diagnostic::error(
+                        "T1004",
+                        format!("meter_map[{i}].bar"),
+                        "meter_map must be strictly ascending by bar",
+                    )
+                    .with_remediation("sort the changes and merge any duplicates"),
+                );
+            }
+        }
+        if let Some(pickup) = self.pickup
+            && pickup < Beat::zero()
+        {
+            diags.push(
+                Diagnostic::error("T1004", "pickup", "the pickup bar can't be negative")
+                    .with_remediation("use zero (no pickup) or a positive beat length"),
+            );
+        }
+        // Grid placement (T1005): every placement must land on a step.
+        if !self.plain_meter() {
+            for (i, pl) in self.arrangement.iter().enumerate() {
+                if self.beat_to_step(self.beat_at_bar(pl.bar)).is_err() {
+                    diags.push(
+                        Diagnostic::error("T1005", format!("arrangement[{i}].bar"), format!("bar {} lands between grid steps", pl.bar))
+                            .with_remediation("raise steps_per_beat, or move the placement/meter change onto the grid"),
+                    );
+                }
+            }
+        }
+        // Sections and markers (T1006).
+        for (i, s) in self.sections.iter().enumerate() {
+            if s.name.is_empty() {
+                diags.push(
+                    Diagnostic::error(
+                        "T1006",
+                        format!("sections[{i}].name"),
+                        "a section needs a name",
+                    )
+                    .with_remediation("name it (e.g. \"verse\", \"chorus\")"),
+                );
+            }
+            if s.bars < 1 {
+                diags.push(
+                    Diagnostic::error(
+                        "T1006",
+                        format!("sections[{i}].bars"),
+                        "a section must be at least one bar",
+                    )
+                    .with_remediation("set bars ≥ 1"),
+                );
+            }
+        }
+        for (i, m) in self.markers.iter().enumerate() {
+            if m.name.is_empty() {
+                diags.push(
+                    Diagnostic::error(
+                        "T1006",
+                        format!("markers[{i}].name"),
+                        "a marker needs a name",
+                    )
+                    .with_remediation("name it (e.g. \"drop\", \"cue\")"),
+                );
+            }
+        }
+    }
+
     /// The [`ProgramMeta`] of the resolved document: the musical facts a
     /// transport needs, captured at compile time.
     fn program_meta(&self, doc: &SoundDoc) -> ProgramMeta {
+        let mut sections = self.sections.clone();
+        sections.sort_by_key(|s| s.bar);
+        let mut markers = self.markers.clone();
+        markers.sort_by_key(|m| m.at);
         ProgramMeta {
             name: doc.name.clone(),
             tempo_bpm: self.bpm.max(1.0),
             beats_per_bar: self.beats_per_bar.max(1),
             steps_per_beat: self.steps_per_beat.max(1),
+            tempo_map: self.tempo_map.clone(),
+            meter_map: self.meter_map.clone(),
+            pickup: self.pickup,
+            sections,
+            markers,
             length_bars: self.length_bars(),
             duration_secs: doc.duration,
             duration_frames: duration_frames(doc),
@@ -610,5 +924,240 @@ mod tests {
         let (el, er) = product.stereo.unwrap();
         assert_eq!(l, el);
         assert_eq!(r, er);
+    }
+
+    #[test]
+    fn tempo_map_walk_is_segment_exact() {
+        // 120 BPM for 4 beats, then 240: beat 8 lands at 2.0 + 1.0 = 3.0 s.
+        let map = vec![
+            crate::dsl::TempoPoint {
+                at: Beat::zero(),
+                bpm: 120.0,
+            },
+            crate::dsl::TempoPoint {
+                at: Beat::from_int(4),
+                bpm: 240.0,
+            },
+        ];
+        assert_eq!(crate::dsl::tempo_map_seconds_at(&map, 0.0), 0.0);
+        assert_eq!(crate::dsl::tempo_map_seconds_at(&map, 4.0), 2.0);
+        assert_eq!(crate::dsl::tempo_map_seconds_at(&map, 8.0), 3.0);
+        assert_eq!(crate::dsl::tempo_map_bpm_at(&map, 3.999), 120.0);
+        assert_eq!(crate::dsl::tempo_map_bpm_at(&map, 4.0), 240.0);
+    }
+
+    fn tempo_mapped_song() -> Song {
+        let mut song = demo_song();
+        song.tempo_map = vec![
+            crate::dsl::TempoPoint {
+                at: Beat::zero(),
+                bpm: 120.0,
+            },
+            crate::dsl::TempoPoint {
+                at: Beat::from_int(4),
+                bpm: 240.0,
+            },
+        ];
+        song
+    }
+
+    #[test]
+    fn tempo_map_reaches_the_seq_and_the_meta() {
+        let program = tempo_mapped_song()
+            .compile(&CompileOptions {
+                sample_rate: Some(48_000),
+                ..CompileOptions::default()
+            })
+            .unwrap();
+        let Node::Tracks { tracks, .. } = &program.doc.root else {
+            panic!("tracks root");
+        };
+        let Node::Seq { tempo_map, .. } = &tracks[0].node else {
+            panic!("seq track");
+        };
+        assert_eq!(tempo_map.len(), 2, "the seq carries the map");
+        assert_eq!(program.meta.tempo_map.len(), 2, "the meta preserves it");
+        // The last note ends at beat 3 (step 12 + len 4 at 4 spb): 1.5 s at
+        // 120 BPM, + 2 s tail.
+        assert!(
+            (program.doc.duration - 3.5).abs() < 1e-4,
+            "{}",
+            program.doc.duration
+        );
+    }
+
+    #[test]
+    fn tempo_map_places_notes_on_exact_frames() {
+        // One note at beat 0 and one at beat 8 (step 32): with 120 → 240 at
+        // beat 4, the second starts at exactly 3.0 s = frame 144 000 at 48 kHz.
+        let json = r#"{ "name": "mapped", "duration": 4.0, "version": 2, "engine": 4,
+            "sample_rate": 48000,
+            "root": { "type": "seq", "bpm": 120, "wave": "sawtooth",
+                "tempo_map": [ { "at": { "num": 0, "den": 1 }, "bpm": 120 },
+                               { "at": { "num": 4, "den": 1 }, "bpm": 240 } ],
+                "env": { "a": 0.0, "d": 0.0, "s": 1.0, "r": 0.01 },
+                "notes": [ { "step": 0, "len": 4, "pitch": "A4" },
+                           { "step": 32, "len": 4, "pitch": "A4" } ] } }"#;
+        let doc: SoundDoc = serde_json::from_str(json).unwrap();
+        doc.validate().unwrap();
+        let out = crate::render::render(&doc);
+        // The saw starts at −1, so the onset frame is the first nonzero sample.
+        let onsets: Vec<usize> = {
+            let mut marks = Vec::new();
+            let mut silent = true;
+            for (i, &s) in out.iter().enumerate() {
+                if silent && s != 0.0 {
+                    marks.push(i);
+                    silent = false;
+                } else if !silent && s == 0.0 {
+                    silent = true;
+                }
+            }
+            marks
+        };
+        assert_eq!(onsets.len(), 2, "two notes: {onsets:?}");
+        assert_eq!(
+            onsets[1] - onsets[0],
+            144_000,
+            "the note past the tempo change lands exactly 3.0 s later: {onsets:?}"
+        );
+    }
+
+    #[test]
+    fn a_tempo_mapped_seq_streams_byte_identically() {
+        let json = r#"{ "name": "mapped", "duration": 1.0, "version": 2, "engine": 4,
+            "root": { "type": "seq", "bpm": 120, "wave": "square",
+                "tempo_map": [ { "at": { "num": 0, "den": 1 }, "bpm": 120 },
+                               { "at": { "num": 2, "den": 1 }, "bpm": 90 } ],
+                "env": { "a": 0.005, "d": 0.05, "s": 0.6, "r": 0.05 },
+                "notes": [ { "step": 0, "len": 2, "pitch": "C4" },
+                           { "step": 6, "len": 2, "pitch": "E4" },
+                           { "step": 12, "len": 2, "pitch": "G4" } ] } }"#;
+        let doc: SoundDoc = serde_json::from_str(json).unwrap();
+        doc.validate().unwrap();
+        crate::streaming::tests::assert_byte_identical(&doc);
+    }
+
+    #[test]
+    fn meter_map_and_pickup_place_bars_exactly() {
+        // 6/8: bar 1 starts at beat 3 (step 12 at 4 spb).
+        let mut song = Song::new("waltzish", 120.0);
+        song.meter_map = vec![MeterPoint {
+            bar: 0,
+            numerator: 6,
+            denominator: 8,
+        }];
+        song.add_track("t", SeqWave::Sine, amp());
+        song.add_pattern("p", 1, vec![note(0, 1, "C4")]);
+        song.arrange("t", "p", 1);
+        assert_eq!(song.beat_at_bar(1), Beat::from_int(3));
+        assert_eq!(song.beat_at_bar(2), Beat::from_int(6));
+        let program = song.compile(&CompileOptions::default()).unwrap();
+        let Node::Tracks { tracks, .. } = &program.doc.root else {
+            panic!("tracks");
+        };
+        let Node::Seq { notes, .. } = &tracks[0].node else {
+            panic!("seq");
+        };
+        assert_eq!(notes[0].step, 12, "bar 1 of 6/8 is step 12");
+        // A one-beat pickup shifts bar 1 to step 4.
+        song.pickup = Some(Beat::from_int(1));
+        let program = song.compile(&CompileOptions::default()).unwrap();
+        let Node::Tracks { tracks, .. } = &program.doc.root else {
+            panic!("tracks");
+        };
+        let Node::Seq { notes, .. } = &tracks[0].node else {
+            panic!("seq");
+        };
+        assert_eq!(notes[0].step, 4, "bar 1 follows the one-beat pickup");
+    }
+
+    #[test]
+    fn off_grid_placements_are_t1005() {
+        let mut song = Song::new("s", 120.0);
+        song.pickup = Some(Beat::new(1, 3)); // a third of a beat at 4 spb
+        song.add_track("t", SeqWave::Sine, amp());
+        song.add_pattern("p", 1, vec![note(0, 1, "C4")]);
+        song.arrange("t", "p", 1);
+        let err = song.compile(&CompileOptions::default()).unwrap_err();
+        assert!(
+            err.0
+                .iter()
+                .any(|d| d.code == "T1005" && d.path == "arrangement[0].bar"),
+            "{:?}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn map_and_section_violations_have_their_codes() {
+        let mut song = demo_song();
+        song.tempo_map = vec![crate::dsl::TempoPoint {
+            at: Beat::from_int(2),
+            bpm: 140.0,
+        }];
+        let err = song.compile(&CompileOptions::default()).unwrap_err();
+        assert!(err.0.iter().any(|d| d.code == "T1003"), "{:?}", err.0);
+
+        let mut song = demo_song();
+        song.meter_map = vec![MeterPoint {
+            bar: 0,
+            numerator: 3,
+            denominator: 5,
+        }];
+        let err = song.compile(&CompileOptions::default()).unwrap_err();
+        assert!(err.0.iter().any(|d| d.code == "T1004"), "{:?}", err.0);
+
+        let mut song = demo_song();
+        song.sections.push(crate::song::Section {
+            name: String::new(),
+            bar: 0,
+            bars: 4,
+        });
+        let err = song.compile(&CompileOptions::default()).unwrap_err();
+        assert!(err.0.iter().any(|d| d.code == "T1006"), "{:?}", err.0);
+    }
+
+    #[test]
+    fn sections_and_markers_reach_the_meta_sorted() {
+        let mut song = demo_song();
+        song.sections.push(crate::song::Section {
+            name: "chorus".into(),
+            bar: 4,
+            bars: 4,
+        });
+        song.sections.push(crate::song::Section {
+            name: "verse".into(),
+            bar: 0,
+            bars: 4,
+        });
+        song.markers.push(crate::song::Marker {
+            name: "drop".into(),
+            at: Beat::from_int(16),
+        });
+        let program = song.compile(&CompileOptions::default()).unwrap();
+        assert_eq!(program.meta.sections[0].name, "verse");
+        assert_eq!(program.meta.sections[1].name, "chorus");
+        assert_eq!(program.meta.markers[0].name, "drop");
+        // And they survive the bundle round-trip.
+        let loaded = crate::program::Program::from_json(&program.to_json()).unwrap();
+        assert_eq!(loaded.meta.sections.len(), 2);
+    }
+
+    #[test]
+    fn length_bars_respects_the_meter_map() {
+        // 6/8 (3 beats a bar): a note ending at beat 6 closes bar 2.
+        let mut song = Song::new("s", 120.0);
+        song.meter_map = vec![MeterPoint {
+            bar: 0,
+            numerator: 6,
+            denominator: 8,
+        }];
+        song.add_track("t", SeqWave::Sine, amp());
+        song.tracks[0].notes.push(note(0, 24, "C4")); // 24 steps = 6 beats
+        assert_eq!(song.length_bars(), 2);
+        // In 4/4 the same note reaches only bar 2's start too (6 beats = 1.5 bars → 2).
+        song.meter_map.clear();
+        assert_eq!(song.length_bars(), 2);
     }
 }

@@ -3,7 +3,7 @@
 
 use super::{
     Adsr, AutoTarget, ENGINE_VERSION, Modulator, Node, Playback, SCHEMA_VERSION, SeqWave, SoundDoc,
-    Stereo, Value, note_to_hz,
+    Stereo, TempoPoint, Value, note_to_hz,
 };
 
 impl Adsr {
@@ -586,6 +586,40 @@ fn validate_gain_db(name: &str, v: f32) -> Result<(), String> {
     Ok(())
 }
 
+/// A seq tempo map is a sorted list of tempo changes starting at beat 0,
+/// with sane tempos and a bounded length. The sampler plays through one
+/// shared synthesizer whose note offs are scheduled in absolute frames, so
+/// it keeps its constant-tempo path — a map there is an authoring error.
+fn validate_tempo_map(map: &[TempoPoint], wave: SeqWave) -> Result<(), String> {
+    if map.is_empty() {
+        return Ok(());
+    }
+    if wave == SeqWave::Sampler {
+        return Err("seq.tempo_map is not supported on the sampler wave".into());
+    }
+    if map.len() > 1024 {
+        return Err(format!(
+            "seq.tempo_map is capped at 1024 points, got {}",
+            map.len()
+        ));
+    }
+    if map[0].at != crate::units::Beat::zero() {
+        return Err("seq.tempo_map's first point must be at beat 0".into());
+    }
+    let mut prev = crate::units::Beat::zero();
+    for (i, p) in map.iter().enumerate() {
+        positive(&format!("seq.tempo_map[{i}].bpm"), p.bpm)?;
+        if i > 0 && p.at <= prev {
+            return Err(format!(
+                "seq.tempo_map must be strictly ascending by beat (point {i} is not after point {})",
+                i - 1
+            ));
+        }
+        prev = p.at;
+    }
+    Ok(())
+}
+
 /// Validate a `Value` whose constant form must lie in [0, 1] (modulated forms
 /// are clamped at render time).
 fn validate_unit_value(v: &Value, what: &str) -> Result<(), String> {
@@ -647,6 +681,7 @@ fn validate_node_at(node: &Node, depth: usize) -> Result<(), String> {
         // decision for every knob this variant grows.
         Node::Seq {
             bpm,
+            tempo_map,
             steps_per_beat,
             wave,
             duty,
@@ -665,6 +700,7 @@ fn validate_node_at(node: &Node, depth: usize) -> Result<(), String> {
             if *steps_per_beat < 1 {
                 return Err("seq.steps_per_beat must be >= 1".into());
             }
+            validate_tempo_map(tempo_map, *wave)?;
             if notes.is_empty() {
                 return Err("seq.notes must be non-empty".into());
             }
