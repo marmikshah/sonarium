@@ -251,6 +251,124 @@ const CORPUS: &[Case] = &[
         mac: (0xb6b0676f4086d076, None),
         linux: Some((0x1c0c5f125c813202, None)),
     },
+    // v1.10 additions: every new deterministic node and voice gets a pin. All
+    // stamped with the current schema/engine pins, the way `SoundDoc::new`
+    // writes new documents.
+    Case {
+        name: "wavetable-basic",
+        json: r#"{ "name": "wavetable-basic", "duration": 0.25, "version": 2, "engine": 4,
+            "root": { "type": "wavetable", "wave": "basic", "freq": 220, "position": 0.5 } }"#,
+        mac: (0x41a5677aee1b1037, None),
+        linux: None,
+    },
+    Case {
+        name: "wavetable-morph",
+        json: r#"{ "name": "wavetable-morph", "duration": 0.3, "version": 2, "engine": 4,
+            "root": { "type": "wavetable", "wave": "harmonics", "freq": 110,
+                "position": { "lfo": { "rate": 2, "depth": 0.5, "center": 0.5 } } } }"#,
+        mac: (0xd38f9cd51e44ad24, None),
+        linux: None,
+    },
+    Case {
+        name: "tremolo-wobble",
+        json: r#"{ "name": "tremolo-wobble", "duration": 0.3, "version": 2, "engine": 4,
+            "root": { "type": "chain", "stages": [
+                { "type": "sine", "freq": 440 },
+                { "type": "tremolo", "rate": 6, "depth": 0.8 } ] } }"#,
+        mac: (0x2fb9fc3269c3669b, None),
+        linux: None,
+    },
+    Case {
+        name: "convolve-space",
+        json: r#"{ "name": "convolve-space", "duration": 0.5, "seed": 4, "version": 2, "engine": 4,
+            "root": { "type": "chain", "stages": [
+                { "type": "mul", "inputs": [
+                    { "type": "noise", "color": "white" },
+                    { "type": "env", "a": 0.001, "d": 0.02, "s": 0.0, "r": 0.01 } ] },
+                { "type": "convolve", "decay": 0.25, "predelay": 0.01, "damp": 0.5, "mix": 0.45 } ] } }"#,
+        mac: (0x3877da20916325a4, None),
+        linux: None,
+    },
+    Case {
+        name: "granular-cloud",
+        json: r#"{ "name": "granular-cloud", "duration": 0.4, "seed": 8, "version": 2, "engine": 4,
+            "root": { "type": "chain", "stages": [
+                { "type": "sine", "freq": 220 },
+                { "type": "granular", "grain_ms": 40, "density": 25, "pitch": 2.0,
+                    "spread": 0.3, "mix": 0.7 } ] } }"#,
+        mac: (0x85ac18c492b92392, None),
+        linux: None,
+    },
+    Case {
+        // Kick track ducks the sustained bass via a tracks-level sidechain.
+        name: "tracks-sidechain",
+        json: r#"{ "name": "tracks-sidechain", "duration": 1.0, "seed": 6, "version": 2, "engine": 4,
+            "root": { "type": "tracks", "tracks": [
+                { "id": "kick", "node": { "type": "seq", "bpm": 240, "wave": "kit", "kit": "808",
+                    "env": { "a": 0.001, "d": 0.1, "s": 0.5, "r": 0.1 },
+                    "notes": [
+                        { "step": 0, "len": 1, "pitch": "midi:36" },
+                        { "step": 4, "len": 1, "pitch": "midi:36" },
+                        { "step": 8, "len": 1, "pitch": "midi:36" },
+                        { "step": 12, "len": 1, "pitch": "midi:36" } ] } },
+                { "id": "bass", "node": { "type": "seq", "bpm": 240, "wave": "sawtooth",
+                    "env": { "a": 0.005, "d": 0.05, "s": 0.8, "r": 0.05 },
+                    "notes": [ { "step": 0, "len": 16, "pitch": "C2" } ] },
+                  "sidechain": { "source": "kick", "amount": 0.8, "attack": 0.005, "release": 0.15 } }
+            ] } }"#,
+        mac: (
+            0xf152984e8fa7017a,
+            Some((0xf152984e8fa7017a, 0xf152984e8fa7017a)),
+        ),
+        linux: None,
+    },
+    Case {
+        name: "seq-brass",
+        json: r#"{ "name": "seq-brass", "duration": 0.8, "version": 2, "engine": 4,
+            "root": { "type": "seq", "bpm": 240, "wave": "brass",
+                "env": { "a": 0.01, "d": 0.05, "s": 1.0, "r": 0.1 },
+                "notes": [
+                    { "step": 0, "len": 4, "pitch": "C3" },
+                    { "step": 4, "len": 4, "pitch": "E3" },
+                    { "step": 8, "len": 6, "pitch": "G3", "gain": 0.85 } ] } }"#,
+        mac: (0xe46f21522d9b95a5, None),
+        linux: None,
+    },
+    Case {
+        name: "seq-flute",
+        json: r#"{ "name": "seq-flute", "duration": 0.8, "version": 2, "engine": 4,
+            "root": { "type": "seq", "bpm": 240, "wave": "flute",
+                "env": { "a": 0.02, "d": 0.05, "s": 1.0, "r": 0.15 },
+                "notes": [
+                    { "step": 0, "len": 8, "pitch": "A4" },
+                    { "step": 8, "len": 6, "pitch": "C5", "gain": 0.9 } ] } }"#,
+        mac: (0x99b9315441f1a433, None),
+        linux: None,
+    },
+    Case {
+        name: "seq-mallet",
+        json: r#"{ "name": "seq-mallet", "duration": 0.8, "version": 2, "engine": 4,
+            "root": { "type": "seq", "bpm": 240, "wave": "mallet",
+                "env": { "a": 0.001, "d": 0.2, "s": 0.3, "r": 0.1 },
+                "notes": [
+                    { "step": 0, "len": 2, "pitch": "C5" },
+                    { "step": 4, "len": 2, "pitch": "E5" },
+                    { "step": 8, "len": 2, "pitch": "G5" },
+                    { "step": 12, "len": 4, "pitch": "C6", "gain": 0.85 } ] } }"#,
+        mac: (0x289a1a60103010a2, None),
+        linux: None,
+    },
+    Case {
+        name: "seq-bell",
+        json: r#"{ "name": "seq-bell", "duration": 1.0, "version": 2, "engine": 4,
+            "root": { "type": "seq", "bpm": 240, "wave": "bell",
+                "env": { "a": 0.001, "d": 0.1, "s": 1.0, "r": 0.3 },
+                "notes": [
+                    { "step": 0, "len": 8, "pitch": "C4" },
+                    { "step": 8, "len": 8, "pitch": "G4", "gain": 0.8 } ] } }"#,
+        mac: (0xcc7cf5e7ed38019f, None),
+        linux: None,
+    },
 ];
 
 /// Song fluent path golden: the arrangement layer compiles through `to_doc`
