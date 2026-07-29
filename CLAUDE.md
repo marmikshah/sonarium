@@ -20,7 +20,11 @@ programmatic playground.
 - **There is never a 2.0.** Breaking changes land in ordinary 1.x minors, and
   deprecated surface is removed directly in the next minor — no long-lived
   deprecation shims. The byte-identity promise below is a product guarantee,
-  independent of version numbers.
+  independent of version numbers. Public API stability is **tiered**
+  (docs/api-tiers.md): the *stable* surface follows SemVer and does not
+  break on the 1.x line — the removal policy here applies to deprecated and
+  *experimental* surface. Architecture decisions live in `docs/adr/`; a new
+  or changed decision means an ADR update in the same commit.
 - The Bevy face lives in the separate `bevy_tono` repo — update it there,
   don't grow a new adapter crate here.
 

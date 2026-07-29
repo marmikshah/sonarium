@@ -17,3 +17,6 @@ The long-form guides, from most-to-least hands-on:
 
 The crate READMEs cover the native faces: [`tono-py`](../crates/tono-py) ·
 [`tono-play`](../crates/tono-play) · [`tono-desktop`](../crates/tono-desktop).
+
+Contributor-facing references: [api-tiers.md](api-tiers.md) (what's stable vs
+experimental) and [adr/](adr/) (architecture decision records).
