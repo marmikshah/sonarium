@@ -30,10 +30,11 @@ and runtime surface.
 - The legacy JSON-string API keeps working through v1.10 — per
   docs/api-tiers.md it is *deprecated* (documented successor: the typed
   API), not removed.
-- **Import name stays `tono`.** The PyPI *distribution* identity (the
-  name on PyPI is taken) is decided at 1.10.0-beta.1, before any
-  publish; it is recorded here as an open decision so no one treats it
-  as settled.
+- **Import name stays `tono`.** The PyPI *distribution* identity was an
+  open decision at 1.10.0-beta.1: **resolved — do not publish to PyPI
+  yet.** Wheels keep shipping as release artifacts and source builds as
+  the documented install path; the decision is revisited at 1.10.0-rc.1
+  before any publish.
 
 ## Consequences
 
