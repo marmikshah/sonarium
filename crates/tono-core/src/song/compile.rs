@@ -132,7 +132,7 @@ impl Song {
         Ok(u32::try_from((num / beat.den as i128).max(0)).unwrap_or(u32::MAX))
     }
 
-    /// Compile to a deterministic [`SoundDoc`](crate::dsl::SoundDoc) — a
+    /// Compile to a deterministic [`SoundDoc`] — a
     /// `tracks` root of `seq` tracks. Errors if the song is empty or an
     /// arrangement references a missing track or pattern.
     pub fn to_doc(&self) -> Result<crate::dsl::SoundDoc, SongError> {
