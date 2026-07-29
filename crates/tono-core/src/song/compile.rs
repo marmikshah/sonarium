@@ -338,7 +338,7 @@ impl Song {
     /// warnings, and a canonical content hash that a Python-authored
     /// equivalent song reproduces exactly.
     ///
-    /// This API is **experimental** through the 1.10.0 alphas
+    /// This API is **stable** — frozen at 1.10.0-rc.1
     /// (docs/api-tiers.md).
     ///
     /// ```

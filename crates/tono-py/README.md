@@ -3,7 +3,7 @@
 The `tono` Python extension: the deterministic engine plus a live runtime,
 from Python. Three surfaces:
 
-- **Typed songs** (experimental through the 1.10.0 alphas) — `tono.Song` /
+- **Typed songs** (stable — frozen at 1.10.0-rc.1) — `tono.Song` /
   `tono.Pattern` / `tono.Program` wrap the native Rust model: no JSON, typed
   stubs (`py.typed` ships in the wheel), and the same canonical program hash
   an equivalent Rust song compiles to.

@@ -408,7 +408,7 @@ impl Song {
     /// becomes the rendered layer id. Notes come from the patterns arranged
     /// onto the track.
     ///
-    /// This API is **experimental** through the 1.10.0 alphas
+    /// This API is **stable** — frozen at 1.10.0-rc.1
     /// (docs/api-tiers.md).
     pub fn add_voice(&mut self, name: impl Into<String>, voice: &Voice) -> &mut Self {
         let name = self.unique_name(&slugify(&name.into()));

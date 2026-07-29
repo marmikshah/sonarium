@@ -160,7 +160,7 @@ engine.load_patch(impact_json).trigger(hardness=0.8, size=0.3)  # zero WAVs
 **Songs** — a composition compiles once into a hashed **Program** (resolved
 document + musical metadata + resource estimates + streaming warnings), and
 the same song produces the same canonical hash from Rust or Python
-(experimental through the 1.10.0 alphas — see
+(stable — frozen at 1.10.0-rc.1 — see
 [docs/api-tiers.md](docs/api-tiers.md)):
 
 ```python

@@ -2,11 +2,11 @@
 //!
 //! Four shapes over one engine, mirroring the Rust crates:
 //!
-//! * **typed songs** (experimental, ADR 0004) — `Song` / `Pattern` / `Track` /
+//! * **typed songs** (stable, ADR 0004) — `Song` / `Pattern` / `Track` /
 //!   `Program` plus the `instruments` catalog, wrapping the native Rust model
 //!   directly: no JSON in the authoring path, and an equivalent song compiles
 //!   to the same Program hash from either language.
-//! * **the performance runtime** (experimental, ADR 0005) — `Performance` runs
+//! * **the performance runtime** (stable, ADR 0005) — `Performance` runs
 //!   a compiled `Program` live on the speakers or headless for tests: a
 //!   sample-accurate transport, scheduled commands, stingers, crossfaded
 //!   swaps, metrics, and command capture.

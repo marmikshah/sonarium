@@ -2,7 +2,7 @@
 
 Stability tiers (docs/api-tiers.md): the legacy JSON-string API is
 *deprecated* (the typed API is the successor); the typed song API is
-*experimental* through the 1.10.0 alphas.
+*stable* — frozen at 1.10.0-rc.1.
 """
 
 from typing import Any, Optional, Union
@@ -97,7 +97,7 @@ class PatchVoice:
     """A loaded SFX patch: trigger one-shot instances with named parameters."""
     def trigger(self, **params: float) -> None: ...
 
-# --- typed song API (experimental through the 1.10.0 alphas) ---
+# --- typed song API (stable — frozen at 1.10.0-rc.1) ---
 
 class TonoError(Exception):
     """The base error for every typed-API failure."""
@@ -368,7 +368,7 @@ class Program:
     @staticmethod
     def load(path: str) -> Program: ...
 
-# --- performance runtime (experimental through the 1.10.0 alphas) ---
+# --- performance runtime (stable — frozen at 1.10.0-rc.1) ---
 
 class PerformanceError(TonoError):
     """A scheduling/runtime failure of a `Performance`. Base class of the

@@ -10,7 +10,7 @@
 //! headless mode keeps the identical control path but spawns no threads:
 //! `fill` drives the render manually.
 //!
-//! This API is **experimental** through the 1.10.0 alphas (docs/api-tiers.md).
+//! This API is **stable** — frozen at 1.10.0-rc.1 (docs/api-tiers.md).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
