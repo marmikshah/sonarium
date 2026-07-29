@@ -1838,3 +1838,68 @@ fn buses_and_sends_round_trip_through_serde() {
         "serde round-trip keeps the render"
     );
 }
+
+/// Stems decompose the mix: every track (muted ones silent) plus every bus
+/// return, and their sum is the pre-master mix exactly.
+#[test]
+fn stems_decompose_the_pre_master_mix() {
+    let d = doc(
+        r#"{ "name":"t", "duration":0.5, "seed":2, "version":2, "engine":4,
+        "root":{ "type":"tracks",
+          "buses":[ { "id":"verb", "gain":0.8, "effects":[ { "type":"reverb", "room":0.5, "mix":0.5 } ] } ],
+          "tracks":[
+            { "id":"kick", "node":{ "type":"sine", "freq":80 }, "gain":0.2,
+              "sends":[ { "bus":"verb", "amount":0.4 } ] },
+            { "id":"pad", "node":{ "type":"sawtooth", "freq":110 }, "gain":0.15, "bus":"verb" },
+            { "id":"mute", "node":{ "type":"sine", "freq":220 }, "mute":true }
+          ],
+          "master":[ { "type":"reverb", "room":0.2, "mix":0.2 } ] } }"#,
+    );
+    let stems = render_stems(&d).unwrap();
+    assert_eq!(stems.len(), 4, "three tracks + one bus");
+    assert_eq!(stems[0].id, "kick");
+    assert!(!stems[0].is_bus);
+    assert_eq!(stems[1].id, "pad");
+    assert_eq!(stems[2].id, "mute");
+    assert!(
+        stems[2].left.iter().all(|&x| x == 0.0),
+        "muted stem is silent"
+    );
+    assert_eq!(stems[3].id, "bus:verb");
+    assert!(stems[3].is_bus);
+    // kick is the only direct-to-master track; pad reaches the master only
+    // through the bus. Sum the stems and compare to the mix pre-master:
+    // recomputing the mix without its master chain is the reference.
+    let plain = doc(
+        r#"{ "name":"t", "duration":0.5, "seed":2, "version":2, "engine":4,
+        "root":{ "type":"tracks",
+          "buses":[ { "id":"verb", "gain":0.8, "effects":[ { "type":"reverb", "room":0.5, "mix":0.5 } ] } ],
+          "tracks":[
+            { "id":"kick", "node":{ "type":"sine", "freq":80 }, "gain":0.2,
+              "sends":[ { "bus":"verb", "amount":0.4 } ] },
+            { "id":"pad", "node":{ "type":"sawtooth", "freq":110 }, "gain":0.15, "bus":"verb" },
+            { "id":"mute", "node":{ "type":"sine", "freq":220 }, "mute":true }
+          ] } }"#,
+    );
+    let reference = render_tracks(&plain).unwrap();
+    let n = reference.left.len();
+    let (mut sl, mut sr) = (vec![0.0f32; n], vec![0.0f32; n]);
+    for s in stems.iter().filter(|s| s.is_bus || s.bus.is_none()) {
+        for i in 0..n {
+            sl[i] += s.left[i];
+            sr[i] += s.right[i];
+        }
+    }
+    // Direct-to-master track stems plus the bus returns reproduce the mix
+    // the master chain hears (the pad's raw stem is its channel output for
+    // external processing — it's already inside bus:verb, so it's excluded).
+    // The limiter is transparent for this quiet mix.
+    let head = n / 2;
+    let diff: f32 = (0..head)
+        .map(|i| (sl[i] - reference.left[i]).abs())
+        .fold(0.0, f32::max);
+    assert!(
+        diff < 1e-6,
+        "stems sum to the pre-master mix (max diff {diff})"
+    );
+}

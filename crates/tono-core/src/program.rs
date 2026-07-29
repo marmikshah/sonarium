@@ -220,6 +220,13 @@ impl Program {
         })
     }
 
+    /// Render per-track and per-bus stereo stems (pre-master-chain — see
+    /// [`render::Stem`]): every track stem plus every bus stem, in
+    /// declaration order. Muted tracks are silent stems.
+    pub fn render_stems(&self) -> Vec<render::Stem> {
+        render::render_stems(&self.doc).unwrap_or_default()
+    }
+
     /// Whether the resolved document streams natively (no warnings is the
     /// same signal — blockers are the only warnings alpha.1 produces).
     pub fn is_streamable(&self) -> bool {

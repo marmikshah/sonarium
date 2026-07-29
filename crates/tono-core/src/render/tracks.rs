@@ -227,6 +227,45 @@ fn duck_envelope(
 /// single stream threaded through the track list in order — their audio stays
 /// byte-identical across upgrades.
 pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
+    render_tracks_impl(doc, false).map(|(r, _)| r)
+}
+
+/// One rendered stem: a track's positioned stereo contribution (post
+/// fader/pan/offset/duck, pre bus/master) or a bus's processed return
+/// (post inserts and return fader, pre master chain). `id` is the track's
+/// layer id, or `bus:<id>` for a bus. Stems are pre-master-chain by
+/// definition: the sum of every MASTER-routed track stem plus every bus
+/// stem reproduces the mix the master chain hears — a bus-routed track's
+/// stem is its channel output for your own processing, already included
+/// in its bus's stem.
+#[derive(Debug, Clone)]
+pub struct Stem {
+    /// The track's layer id, or `bus:<id>` for a bus stem.
+    pub id: String,
+    /// Whether this is a bus stem (a processed bus return).
+    pub is_bus: bool,
+    /// Where this track stem routes: `Some(bus id)` if its main output goes
+    /// to a bus (the stem is then already inside that bus's stem), None if
+    /// it lands on the master bus directly. Always None for bus stems.
+    pub bus: Option<String>,
+    /// The left channel.
+    pub left: Signal,
+    /// The right channel.
+    pub right: Signal,
+}
+
+/// Render a `tracks` document to per-track and per-bus stereo stems (see
+/// [`Stem`]). Muted tracks render as silent stems. `None` for a non-tracks
+/// document, exactly like [`render_tracks`].
+pub fn render_stems(doc: &SoundDoc) -> Option<Vec<Stem>> {
+    let (_, stems) = render_tracks_impl(doc, true)?;
+    Some(stems.expect("stems requested"))
+}
+
+fn render_tracks_impl(
+    doc: &SoundDoc,
+    want_stems: bool,
+) -> Option<(TracksRender, Option<Vec<Stem>>)> {
     let Node::Tracks {
         tracks,
         master,
@@ -303,6 +342,7 @@ pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
     // buses routes everything to master — the exact legacy mix.
     let mut layers = Vec::with_capacity(tracks.len());
     let mut energies = Vec::with_capacity(tracks.len());
+    let mut stems = want_stems.then(Vec::new);
     let mut bus_bufs: Vec<(Vec<f32>, Vec<f32>)> = buses
         .iter()
         .map(|_| (vec![0.0f32; n], vec![0.0f32; n]))
@@ -312,6 +352,15 @@ pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
     for (ti, t) in tracks.iter().enumerate() {
         let layer_id = layer_ids[ti].clone();
         if let TrackRender::Muted = &rendered[ti] {
+            if let Some(stems) = &mut stems {
+                stems.push(Stem {
+                    id: layer_id.clone(),
+                    is_bus: false,
+                    bus: t.bus.clone(),
+                    left: vec![0.0f32; n],
+                    right: vec![0.0f32; n],
+                });
+            }
             layers.push(LayerStats {
                 id: layer_id,
                 peak_dbfs: -180.0,
@@ -420,6 +469,16 @@ pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
                 br[i] += cr[i] * amount;
             }
         }
+        // The stem is this exact contribution (pre bus/master).
+        if let Some(stems) = &mut stems {
+            stems.push(Stem {
+                id: layer_id.clone(),
+                is_bus: false,
+                bus: t.bus.clone(),
+                left: cl.clone(),
+                right: cr.clone(),
+            });
+        }
         // RMS over the whole timeline (both channels), so layers compare
         // fairly regardless of where `at` placed them.
         let rms = ((tsum / (2 * n) as f64) as f32).sqrt();
@@ -458,6 +517,15 @@ pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
             }
         }
         let gain = if b.gain.is_finite() { b.gain } else { 1.0 };
+        if let Some(stems) = &mut stems {
+            stems.push(Stem {
+                id: format!("bus:{}", b.id),
+                is_bus: true,
+                bus: None,
+                left: bl.iter().map(|x| x * gain).collect(),
+                right: br.iter().map(|x| x * gain).collect(),
+            });
+        }
         for i in 0..n {
             left[i] += bl[i] * gain;
             right[i] += br[i] * gain;
@@ -502,11 +570,14 @@ pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
         }
     }
     peak_limit(&mut [&mut left, &mut right]);
-    Some(TracksRender {
-        left,
-        right,
-        layers,
-    })
+    Some((
+        TracksRender {
+            left,
+            right,
+            layers,
+        },
+        stems,
+    ))
 }
 
 /// A track whose node is directly a sampler seq renders in native stereo.
