@@ -275,8 +275,8 @@ impl From<Modulator> for Value {
 /// A4 = 440 Hz, 12-tone equal temperament. Returns `None` if unparseable.
 ///
 /// This is the engine-0 (platform-libm) conversion — the historical public
-/// behavior, kept for API compatibility. The render paths call
-/// [`note_to_hz_e`] with the document's engine so engine ≥ 5 documents
+/// behavior, kept for API compatibility. The render paths call the
+/// engine-aware variant with the document's engine so engine ≥ 5 documents
 /// convert through the deterministic kernels (ADR 0001).
 pub fn note_to_hz(s: &str) -> Option<f32> {
     note_to_hz_e(s, 0)

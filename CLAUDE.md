@@ -111,7 +111,18 @@ from `Cargo.toml`; CI publishes to crates.io and builds wheels on the tag):
    dry-run only resolves once `tono-core` X.Y.Z is on crates.io, so it runs
    after step 4, not before.
 4. `make release` (tags `vX.Y.Z`, pushes; CI publishes `tono-core` then
-   `tono`, creates the GitHub Release, and builds the tag-only wheels).
+   `tono`, creates the GitHub Release, and builds the tag-only wheels and
+   CLI binaries).
+
+Before the tag, the release-candidate gates: `make verify` on the pinned
+toolchain plus `stable-compat` green; `cargo doc -p tono-core --no-deps`
+warning-free (the rustdoc gate — keep it at zero); the API compatibility
+review — `cargo public-api diff` against the last tag if the tool is
+installed, otherwise a manual skim of `git diff <last-tag> -- */src/lib.rs
+crates/*/src/lib.rs` public items against docs/api-tiers.md (stable surface
+must not break; experimental changes called out in the CHANGELOG); the
+Audit workflow green (licenses + advisories); and the on-demand soak
+(`cargo test -p tono-core --test soak -- --include-ignored`) clean.
 
 ## Conventions
 

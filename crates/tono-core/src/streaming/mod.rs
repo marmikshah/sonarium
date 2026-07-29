@@ -26,7 +26,7 @@
 //!   carry their envelopes across blocks, and the bus/master insert chains
 //!   run as stereo processor pairs (reverb gets the 0/23 decorrelated
 //!   spread) — byte-identical to the offline mixer at any block size (see
-//!   [`tracks`]).
+//!   `streaming::tracks`).
 //!
 //! What falls back to the byte-identical buffer-backed
 //! [`crate::player::Player`]: RNG nodes under `engine < 2` (they keep the old
