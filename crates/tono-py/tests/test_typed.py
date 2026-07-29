@@ -178,6 +178,16 @@ def test_stems_render() -> None:
     mix = program.render()
     assert total.shape == mix.shape
     assert program.stem_routing == {}, "no bus routing in this song"
+    # A selected range is a slice of the full render; bars resolve through the meter.
+    piece = program.render_range(frames=(1000, 5000))
+    assert np.array_equal(piece, mix[1000:5000])
+    bar1 = program.render_range(bars=(0, 1))
+    assert bar1.shape[0] == 48_000 * 60 * 4 // 120, "one bar at 120 BPM is 2 s"
+    try:
+        program.render_range(frames=(0, 1), bars=(0, 1))
+        raise AssertionError("both range forms must be rejected")
+    except ValueError:
+        pass
 
 
 # --- alpha.2: temporal maps, structure, buses, automation, ops, harmony ---

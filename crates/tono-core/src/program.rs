@@ -223,6 +223,27 @@ impl Program {
         })
     }
 
+    /// Render a frame range `[start, end)` as a stereo pair — a slice of the
+    /// full render, so a note or tail crossing the range boundary sounds
+    /// exactly as it does in the full mix (this is why ranges render through,
+    /// not from, the boundary). Out-of-range requests clamp.
+    pub fn render_range_frames(&self, start: u64, end: u64) -> (Vec<f32>, Vec<f32>) {
+        let (l, r) = self.render_stereo();
+        let start = (start as usize).min(l.len());
+        let end = (end as usize).min(l.len()).max(start);
+        (l[start..end].to_vec(), r[start..end].to_vec())
+    }
+
+    /// Render a bar range `[start_bar, end_bar)` through the program's meter
+    /// map (see [`render_range_frames`]).
+    pub fn render_range_bars(&self, start_bar: u32, end_bar: u32) -> (Vec<f32>, Vec<f32>) {
+        let transport = crate::runtime::Transport::for_program(&self.meta);
+        self.render_range_frames(
+            transport.frame_at_bar(start_bar),
+            transport.frame_at_bar(end_bar),
+        )
+    }
+
     /// Render per-track and per-bus stereo stems (pre-master-chain — see
     /// [`render::Stem`]): every track stem plus every bus stem, in
     /// declaration order. Muted tracks are silent stems.
@@ -354,6 +375,22 @@ mod tests {
         assert_eq!(loaded.render_mono(), program.render_mono());
         // The capability list is machine-readable and derived on load.
         assert!(loaded.capabilities().contains(&"streaming"));
+    }
+
+    #[test]
+    fn render_range_is_a_slice_of_the_full_render() {
+        let program = two_track_program();
+        let (l, r) = program.render_stereo();
+        let (sl, sr) = program.render_range_frames(1000, 5000);
+        assert_eq!(sl, l[1000..5000].to_vec());
+        assert_eq!(sr, r[1000..5000].to_vec());
+        // A bar range converts through the meter map.
+        let (bl, _) = program.render_range_bars(0, 1);
+        let transport = crate::runtime::Transport::for_program(&program.meta);
+        assert_eq!(bl.len(), transport.frame_at_bar(1) as usize);
+        // Out-of-range clamps instead of panicking.
+        let (cl, _) = program.render_range_frames(u64::MAX - 1, u64::MAX);
+        assert!(cl.is_empty());
     }
 
     #[test]

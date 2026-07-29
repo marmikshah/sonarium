@@ -350,6 +350,12 @@ class Program:
         """Per-track and per-bus stereo stems (pre-master-chain): stem id →
         owned float32 array of shape (frames, 2). Muted tracks are silent."""
         ...
+    def render_range(self, *, frames: Optional[tuple[int, int]] = None,
+                     bars: Optional[tuple[int, int]] = None) -> npt.NDArray[np.float32]:
+        """Render a selected range (frames=(start, end) or bars=(start, end))
+        as an owned float32 array of shape (frames, 2) — a slice of the full
+        render, so tails crossing the boundary sound as in the full mix."""
+        ...
     @property
     def stem_routing(self) -> dict[str, str]:
         """`{track_id: bus_id}` for tracks routed to a bus (their stem is
