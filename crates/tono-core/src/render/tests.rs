@@ -49,6 +49,69 @@ fn gain_automation_ramp_fades_the_track() {
     assert!(tail < head * 0.6, "ramp fades: head {head}, tail {tail}");
 }
 
+/// The default (no `curve` field) is linear, byte-for-byte: explicit
+/// `"curve":"linear"` renders identically to no curve at all.
+#[test]
+fn automation_curve_defaults_to_linear_byte_identically() {
+    let base = r#"{ "name":"t", "duration":0.4, "seed":1, "version":2,
+            "root":{ "type":"tracks", "tracks":[ { "id":"a", "gain":1.0,
+              "automation":[{"target":"gain","points":[{"t":0,"v":0.5},{"t":0.4,"v":1.0}]}],
+              "node":{ "type":"sine", "freq":220 } } ] } }"#;
+    let explicit = r#"{ "name":"t", "duration":0.4, "seed":1, "version":2,
+            "root":{ "type":"tracks", "tracks":[ { "id":"a", "gain":1.0,
+              "automation":[{"target":"gain","curve":"linear","points":[{"t":0,"v":0.5},{"t":0.4,"v":1.0}]}],
+              "node":{ "type":"sine", "freq":220 } } ] } }"#;
+    let a = render_tracks(&doc(base)).unwrap();
+    let b = render_tracks(&doc(explicit)).unwrap();
+    let bits = |s: &[f32]| s.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&a.left), bits(&b.left));
+}
+
+/// A step lane holds the old value until the breakpoint, then jumps — no
+/// ramp. The midpoint before the jump measures the old level; after, the
+/// new one.
+#[test]
+fn automation_step_holds_then_jumps() {
+    let d = doc(r#"{ "name":"t", "duration":1.0, "seed":1, "version":2,
+            "root":{ "type":"tracks", "tracks":[ { "id":"a", "gain":1.0,
+              "automation":[{"target":"gain","curve":"step","points":[{"t":0,"v":0.2},{"t":0.5,"v":1.0}]}],
+              "node":{ "type":"sine", "freq":220 } } ] } }"#);
+    let r = render_tracks(&d).unwrap();
+    let sr_len = r.left.len();
+    let q1 = rms(&r.left[..sr_len / 4]); // 0..0.25s — held at 0.2
+    let q3 = rms(&r.left[sr_len / 2..sr_len * 3 / 4]); // 0.5..0.75s — jumped to 1.0
+    let ratio = q3 / q1;
+    assert!(
+        ratio > 4.0,
+        "step jumps 0.2 → 1.0 with no ramp: {q1} vs {q3}"
+    );
+}
+
+/// An exp lane between positive endpoints is geometric: the temporal
+/// midpoint lands at the geometric mean (√(v0·v1)), not the arithmetic one.
+#[test]
+fn automation_exp_is_geometric_between_positive_endpoints() {
+    // v0 = 0.1, v1 = 0.4, linear midpoint 0.25 vs geometric 0.2 — 25% apart.
+    let mk = |curve: &str| {
+        doc(&format!(
+            r#"{{ "name":"t", "duration":1.0, "seed":1, "version":2,
+                "root":{{ "type":"tracks", "tracks":[ {{ "id":"a", "gain":1.0,
+                  "automation":[{{"target":"gain","curve":"{curve}","points":[{{"t":0,"v":0.1}},{{"t":1.0,"v":0.4}}]}}],
+                  "node":{{ "type":"sine", "freq":220 }} }} ] }} }}"#
+        ))
+    };
+    let lin = render_tracks(&mk("linear")).unwrap();
+    let exp = render_tracks(&mk("exp")).unwrap();
+    let n = lin.left.len();
+    // The window 0.45..0.55 s centers on the midpoint.
+    let mid = |s: &[f32]| rms(&s[n * 45 / 100..n * 55 / 100]);
+    let (l, e) = (mid(&lin.left), mid(&exp.left));
+    assert!(
+        (e / l - 0.8).abs() < 0.05,
+        "geometric midpoint is 0.8× the linear one: {l} vs {e}"
+    );
+}
+
 #[test]
 fn render_product_mid_is_the_track_bus_average() {
     let d = doc(r#"{ "name": "t", "duration": 0.05, "seed": 3, "version": 2,

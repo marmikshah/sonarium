@@ -83,6 +83,34 @@ pub struct SongTrack {
     /// is both muted and solo stays muted.
     #[serde(default)]
     pub solo: bool,
+    /// Automation on this track's gain/pan, addressed in BEATS on the song
+    /// grid and compiled to seconds through the tempo map (or the constant
+    /// bpm). Empty = the static `gain`/`pan` apply — byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub automation: Vec<SongLane>,
+}
+
+/// One automation lane on a song track: `target` driven by beat-addressed
+/// breakpoints (see the document's `AutoLane` for the compiled form).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SongLane {
+    /// What this lane controls (gain or pan).
+    pub target: crate::dsl::AutoTarget,
+    /// The interpolation between breakpoints (default linear).
+    #[serde(default)]
+    pub curve: crate::dsl::AutoCurve,
+    /// Breakpoints on the beat grid.
+    pub points: Vec<SongPoint>,
+}
+
+/// One beat-addressed automation breakpoint.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SongPoint {
+    /// The beat position (fractional beats are fine — the lane is a
+    /// continuous curve, not grid events).
+    pub at: f32,
+    /// The target value at this beat.
+    pub v: f32,
 }
 
 /// A reusable phrase: notes on the bar grid, `bars` long. Note `step`s are
@@ -321,6 +349,7 @@ impl Song {
             humanize: None,
             mute: false,
             solo: false,
+            automation: Vec::new(),
         });
         self
     }
@@ -357,6 +386,7 @@ impl Song {
             humanize: instrument.humanize,
             mute: false,
             solo: false,
+            automation: Vec::new(),
         });
         self
     }
@@ -390,6 +420,7 @@ impl Song {
             humanize: voice.humanize,
             mute: false,
             solo: false,
+            automation: Vec::new(),
         });
         self
     }

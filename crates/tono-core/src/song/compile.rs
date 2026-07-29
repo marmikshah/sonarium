@@ -362,9 +362,39 @@ impl Song {
             gain: t.gain,
             at: 0.0,
             mute: t.mute || (any_solo && !t.solo),
-            automation: Vec::new(),
+            automation: t
+                .automation
+                .iter()
+                .map(|lane| self.compile_lane(lane))
+                .collect(),
             sidechain: None,
         })
+    }
+
+    /// A song lane (beats) to a document lane (seconds): through the tempo
+    /// map when the song has one, else the constant bpm.
+    fn compile_lane(&self, lane: &super::SongLane) -> crate::dsl::AutoLane {
+        crate::dsl::AutoLane {
+            target: lane.target,
+            curve: lane.curve,
+            points: lane
+                .points
+                .iter()
+                .map(|p| crate::dsl::AutoPoint {
+                    t: self.seconds_at_beat(p.at),
+                    v: p.v,
+                })
+                .collect(),
+        }
+    }
+
+    /// Seconds at a beat position on the song grid (the lane conversion).
+    fn seconds_at_beat(&self, beat: f32) -> f32 {
+        if self.tempo_map.is_empty() {
+            beat * 60.0 / self.bpm.max(1.0)
+        } else {
+            crate::dsl::tempo_map_seconds_at(&self.tempo_map, beat as f64) as f32
+        }
     }
 }
 
@@ -1159,5 +1189,51 @@ mod tests {
         // In 4/4 the same note reaches only bar 2's start too (6 beats = 1.5 bars → 2).
         song.meter_map.clear();
         assert_eq!(song.length_bars(), 2);
+    }
+
+    #[test]
+    fn automation_compiles_beats_to_seconds() {
+        let mut song = Song::new("s", 120.0);
+        song.add_track("t", SeqWave::Sine, amp());
+        song.tracks[0].notes.push(note(0, 4, "C4"));
+        song.tracks[0].automation.push(crate::song::SongLane {
+            target: crate::dsl::AutoTarget::Gain,
+            curve: crate::dsl::AutoCurve::Step,
+            points: vec![
+                crate::song::SongPoint { at: 0.0, v: 0.2 },
+                crate::song::SongPoint { at: 2.0, v: 0.8 },
+            ],
+        });
+        let program = song.compile(&CompileOptions::default()).unwrap();
+        let Node::Tracks { tracks, .. } = &program.doc.root else {
+            panic!("tracks root");
+        };
+        assert_eq!(tracks[0].automation.len(), 1);
+        assert_eq!(tracks[0].automation[0].curve, crate::dsl::AutoCurve::Step);
+        assert_eq!(
+            tracks[0].automation[0].points[1].t, 1.0,
+            "beat 2 at 120 BPM is 1.0 s"
+        );
+
+        // Through a tempo map: 120 → 60 at beat 2, so beat 4 is 1 + 2 = 3 s.
+        song.tempo_map = vec![
+            crate::dsl::TempoPoint {
+                at: Beat::zero(),
+                bpm: 120.0,
+            },
+            crate::dsl::TempoPoint {
+                at: Beat::from_int(2),
+                bpm: 60.0,
+            },
+        ];
+        song.tracks[0].automation[0].points[1].at = 4.0;
+        let program = song.compile(&CompileOptions::default()).unwrap();
+        let Node::Tracks { tracks, .. } = &program.doc.root else {
+            panic!("tracks root");
+        };
+        assert_eq!(
+            tracks[0].automation[0].points[1].t, 3.0,
+            "the lane crosses the tempo map segment-wise"
+        );
     }
 }

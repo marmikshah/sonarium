@@ -114,12 +114,13 @@ fn lane_for(
     }
     let mut pts = lane.points.clone();
     pts.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
-    // Linear interpolation over the sorted breakpoints, holding flat past
-    // either end. The sample time is strictly increasing, so a persistent
-    // segment cursor replaces a from-zero scan per sample (O(n + p), not
-    // O(n·p)). Strict `>` in the advance keeps the exact segment the scan
-    // would pick — a sample landing on a breakpoint interpolates in the
-    // earlier segment, so the floats (and the rendered bytes) are unchanged.
+    // Interpolation over the sorted breakpoints per the lane's curve, holding
+    // flat past either end. The sample time is strictly increasing, so a
+    // persistent segment cursor replaces a from-zero scan per sample
+    // (O(n + p), not O(n·p)). Strict `>` in the advance keeps the exact
+    // segment the scan would pick — a sample landing on a breakpoint
+    // interpolates in the earlier segment, so the floats (and the rendered
+    // bytes) are unchanged.
     let mut idx = 0;
     Some(
         (0..n)
@@ -137,7 +138,27 @@ fn lane_for(
                 }
                 let (w0, w1) = (&pts[idx], &pts[idx + 1]);
                 let span = (w1.t - w0.t).max(1e-9);
-                w0.v + (w1.v - w0.v) * ((t - w0.t) / span)
+                let u = (t - w0.t) / span;
+                match lane.curve {
+                    crate::dsl::AutoCurve::Linear => w0.v + (w1.v - w0.v) * u,
+                    // Hold w0 until the next breakpoint lands.
+                    crate::dsl::AutoCurve::Step => {
+                        if u >= 1.0 {
+                            w1.v
+                        } else {
+                            w0.v
+                        }
+                    }
+                    // Exponential between same-sign positive endpoints; any
+                    // other segment degrades to linear (deterministic).
+                    crate::dsl::AutoCurve::Exp => {
+                        if w0.v > 0.0 && w1.v > 0.0 {
+                            w0.v * (w1.v / w0.v).powf(u)
+                        } else {
+                            w0.v + (w1.v - w0.v) * u
+                        }
+                    }
+                }
             })
             .collect(),
     )
