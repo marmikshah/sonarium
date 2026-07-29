@@ -670,6 +670,41 @@ impl Program {
         py.detach(|| self.inner.render_mono()).into_pyarray(py)
     }
 
+    /// Render per-track and per-bus stereo stems (pre-master-chain): a dict
+    /// mapping stem id (`"bass"`, `"bus:verb"`) to an `(frames, 2)` float32
+    /// array, in declaration order. A stem's `bus` routing is in
+    /// `stem_routing`. Muted tracks are silent stems.
+    fn render_stems<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let stems = py.detach(|| self.inner.render_stems());
+        let dict = PyDict::new(py);
+        for s in &stems {
+            let frames = s.left.len();
+            let mut interleaved = Vec::with_capacity(frames * 2);
+            for i in 0..frames {
+                interleaved.push(s.left[i]);
+                interleaved.push(s.right[i]);
+            }
+            dict.set_item(&s.id, interleaved.into_pyarray(py).reshape([frames, 2])?)?;
+        }
+        Ok(dict)
+    }
+
+    /// Where each track stem routes: `{track_id: bus_id}` for tracks whose
+    /// main output goes to a bus (their stem is already inside that bus's
+    /// stem). Read from the compiled document — no render pass.
+    #[getter]
+    fn stem_routing<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        if let tono_core::dsl::Node::Tracks { tracks, .. } = &self.inner.doc.root {
+            for t in tracks {
+                if let (Some(id), Some(bus)) = (&t.id, &t.bus) {
+                    dict.set_item(id, bus)?;
+                }
+            }
+        }
+        Ok(dict)
+    }
+
     /// Serialize the program bundle (compact JSON).
     fn to_json(&self) -> String {
         self.inner.to_json()

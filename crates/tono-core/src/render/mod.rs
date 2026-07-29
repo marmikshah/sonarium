@@ -51,7 +51,7 @@ mod tracks;
 
 pub use output::{loop_seam_db, make_loop_buffer, stereoize};
 use output::{normalize_output, normalize_output_v4};
-pub use tracks::{LayerStats, TracksRender, render_tracks};
+pub use tracks::{LayerStats, Stem, TracksRender, render_stems, render_tracks};
 
 /// Render a sound document once, yielding the mono mid plus the stereo bus
 /// for mixer documents. Every consumer that needs both (analysis + the WAV on

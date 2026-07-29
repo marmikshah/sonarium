@@ -154,6 +154,27 @@ def test_packaging_and_legacy_surface() -> None:
     importlib.import_module("tono.instruments")  # importable as a submodule too
 
 
+def test_stems_render() -> None:
+    song = tono.Song("stem-test", tempo=120)
+    bass = song.track("bass", tono.instruments.bass("finger"))
+    keys = song.track("keys", tono.instruments.piano("grand"))
+    riff = tono.Pattern(bars=1)
+    riff.notes(["C2", "G2"], durations=1.0)
+    song.arrange(bass, riff, bars=1)
+    song.arrange(keys, riff, bars=1)
+    program = song.compile(sample_rate=48_000)
+    stems = program.render_stems()
+    assert set(stems) == {"bass", "keys"}, stems.keys()
+    for arr in stems.values():
+        assert arr.shape[1] == 2 and arr.dtype == np.float32
+        assert np.abs(arr).max() > 0, "each stem sounds"
+    # The stem sum is the mix the master chain hears (all master-routed here).
+    total = sum(stems.values())
+    mix = program.render()
+    assert total.shape == mix.shape
+    assert program.stem_routing == {}, "no bus routing in this song"
+
+
 if __name__ == "__main__":
     test_equivalence_hash_matches_rust()
     test_render_shapes_and_determinism()
@@ -161,4 +182,5 @@ if __name__ == "__main__":
     test_error_paths()
     test_voice_builders_chain_and_pattern_repr()
     test_packaging_and_legacy_surface()
+    test_stems_render()
     print("all typed-API checks passed")

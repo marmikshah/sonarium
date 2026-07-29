@@ -13,14 +13,15 @@ use tono_core::render;
 const HELP: &str = "tono — a deterministic sound engine.
 
 USAGE:
-    tono render FILE.json [-o DIR] [--format wav|flac|ogg] [--watch]
+    tono render FILE.json [-o DIR] [--format wav|flac|ogg] [--stems DIR] [--watch]
         Render a SoundDoc into DIR (default: .):
           <name>.wav|flac|ogg   the audio
           <name>.png            spectrogram   (look at this)
           <name>_wave.png       waveform      (and this)
           <name>.stats.json     peak/RMS/LUFS/spectral/transient analysis
-        --watch re-renders on every save (Ctrl-C to stop) — the
-        edit/inspect loop at full speed.
+        --stems also writes every track and bus stem (pre-master) as
+        stereo WAVs into DIR. --watch re-renders on every save
+        (Ctrl-C to stop) — the edit/inspect loop at full speed.
 
     tono vary FILE.json [-n COUNT] [--amount 0..1] [--seed N] [-o DIR] [--format wav|flac|ogg]
         Render COUNT deterministic variations of a SoundDoc (default 4,
@@ -205,12 +206,17 @@ fn sanitize_stem(name: &str) -> anyhow::Result<String> {
 }
 
 fn render_cmd(args: &[String]) -> anyhow::Result<()> {
-    let cli = Cli::parse(args, &["-o", "--out", "--format"], &["--watch"])?;
-    let file = cli.input("tono render FILE.json [-o DIR] [--format wav|flac|ogg] [--watch]")?;
+    let cli = Cli::parse(args, &["-o", "--out", "--format", "--stems"], &["--watch"])?;
+    let file = cli
+        .input("tono render FILE.json [-o DIR] [--format wav|flac|ogg] [--stems DIR] [--watch]")?;
     let out_dir = PathBuf::from(cli.flag(&["-o", "--out"]).unwrap_or("."));
+    let stems_dir = cli.flag(&["--stems"]).map(PathBuf::from);
     let format = parse_format(cli.flag(&["--format"]))?;
     let watch = cli.has("--watch");
     fs::create_dir_all(&out_dir)?;
+    if let Some(dir) = &stems_dir {
+        fs::create_dir_all(dir)?;
+    }
 
     // Render once, then re-render on every save. With --watch, an edit that
     // leaves the doc invalid is reported and watched through, not fatal.
@@ -226,7 +232,11 @@ fn render_cmd(args: &[String]) -> anyhow::Result<()> {
             } else {
                 sanitize_stem(&doc.name)?
             };
-            render_to_dir(&doc, &stem, &out_dir, format)
+            render_to_dir(&doc, &stem, &out_dir, format)?;
+            if let Some(dir) = &stems_dir {
+                write_stems(&doc, &stem, dir)?;
+            }
+            Ok(())
         });
         match result {
             Ok(()) => {}
@@ -319,6 +329,23 @@ fn render_to_dir(doc: &SoundDoc, stem: &str, out_dir: &Path, format: &str) -> an
     println!("{}", png.display());
     println!("{}", analysis.waveform_png_path);
     println!("{}", stats.display());
+    Ok(())
+}
+
+/// `tono render --stems`: write every track and bus stem as a stereo WAV
+/// (pre-master-chain — they feed an external mixer). Stem ids carry `bus:`
+/// prefixes, sanitized to `bus_` for portable filenames.
+fn write_stems(doc: &SoundDoc, stem: &str, dir: &Path) -> anyhow::Result<()> {
+    let stems = tono_core::render::render_stems(doc).ok_or_else(|| {
+        anyhow::anyhow!("--stems needs a tracks document (this one has a single-graph root)")
+    })?;
+    for s in &stems {
+        let safe_id = s.id.replace(':', "_");
+        let safe_id = sanitize_stem(&safe_id)?;
+        let path = dir.join(format!("{stem}_{safe_id}.wav"));
+        tono::audio::write_wav_stereo(&path, &s.left, &s.right, doc.sample_rate, 16)?;
+        println!("{}", path.display());
+    }
     Ok(())
 }
 
