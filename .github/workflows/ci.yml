@@ -26,3 +26,20 @@ jobs:
       - name: Verify
         # The one gate — identical to the pre-push hook and `make verify`.
         run: make verify
+
+  build-wasm:
+    # The WASM face on the fast path: build-only (no browser tests, keeping
+    # the fast path fast). Compiling tono-core + tono-wasm to the supported
+    # wasm32 target on every push/PR is what covers core/runtime changes for
+    # the browser face — per-job path filters aren't a house pattern (the
+    # Native workflow gates at the workflow level instead), and this job is
+    # cheap enough to always run.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the WASM face
+        run: cargo build -p tono-wasm --target wasm32-unknown-unknown

@@ -1,0 +1,188 @@
+<!doctype html>
+<!--
+  tono-wasm example — a PLAYER, not an editor. Compiles the embedded Song JSON
+  in-page, offers a WAV download of the offline bounce, and plays the same
+  program live through the AudioWorklet runtime.
+
+  Run it (the wasm module won't load over file://):
+
+      make wasm && cd crates/tono-wasm && python3 -m http.server 8000
+      # open http://localhost:8000/js/example.html
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>tono — wasm player</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+  h1 { font-size: 1.3rem; }
+  button { font: inherit; padding: 0.45rem 0.9rem; margin-right: 0.5rem; cursor: pointer; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  #status { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 0.85rem;
+            background: #f5f5f5; border: 1px solid #e0e0e0; border-radius: 6px; padding: 0.75rem; }
+  .row { margin: 0.75rem 0; }
+  label { font-size: 0.85rem; color: #555; }
+</style>
+</head>
+<body>
+<h1>tono — wasm player</h1>
+<p>A small song compiled in-page by <code>tono-wasm</code>. Bounce it to a WAV
+file, or play it live through the AudioWorklet — same engine, byte-identical
+audio.</p>
+
+<div class="row">
+  <button id="render" disabled>Render → WAV download</button>
+  <button id="play" disabled>▶ Play live</button>
+  <button id="hook" disabled>Jump to “hook” at next bar</button>
+</div>
+<div class="row"><label id="position">—</label></div>
+<div id="status">loading the wasm module…</div>
+
+<!-- The song, as data — this page is a player, so it's fixed. -->
+<script type="application/json" id="song">
+{
+  "name": "wasm-demo",
+  "bpm": 112,
+  "version": 2,
+  "tracks": [
+    { "name": "bass", "wave": "bass", "env": { "a": 0.005, "d": 0.12, "s": 0.7, "r": 0.15, "punch": 0.0 } },
+    { "name": "keys", "wave": "epiano", "env": { "a": 0.004, "d": 0.2, "s": 0.4, "r": 0.25, "punch": 0.0 } },
+    { "name": "kit", "wave": "kit", "env": { "a": 0.001, "d": 0.05, "s": 0.6, "r": 0.05, "punch": 0.0 } }
+  ],
+  "patterns": [
+    { "name": "riff", "bars": 1, "notes": [
+      { "step": 0, "len": 2, "pitch": "C2" }, { "step": 4, "len": 2, "pitch": "C2" },
+      { "step": 8, "len": 2, "pitch": "G1" }, { "step": 12, "len": 2, "pitch": "A1" } ] },
+    { "name": "stabs", "bars": 1, "notes": [
+      { "step": 0, "len": 3, "pitch": "C4" }, { "step": 0, "len": 3, "pitch": "D#4" }, { "step": 0, "len": 3, "pitch": "G4" },
+      { "step": 8, "len": 3, "pitch": "A#3" }, { "step": 8, "len": 3, "pitch": "D4" }, { "step": 8, "len": 3, "pitch": "G4" } ] },
+    { "name": "beat", "bars": 1, "notes": [
+      { "step": 0, "len": 2, "pitch": "midi:36" }, { "step": 4, "len": 2, "pitch": "midi:42" },
+      { "step": 8, "len": 2, "pitch": "midi:38" }, { "step": 12, "len": 2, "pitch": "midi:42" } ] }
+  ],
+  "arrangement": [
+    { "track": "bass", "pattern": "riff", "bar": 0 }, { "track": "bass", "pattern": "riff", "bar": 1 },
+    { "track": "bass", "pattern": "riff", "bar": 2 }, { "track": "bass", "pattern": "riff", "bar": 3 },
+    { "track": "keys", "pattern": "stabs", "bar": 1 }, { "track": "keys", "pattern": "stabs", "bar": 3 },
+    { "track": "kit", "pattern": "beat", "bar": 0 }, { "track": "kit", "pattern": "beat", "bar": 1 },
+    { "track": "kit", "pattern": "beat", "bar": 2 }, { "track": "kit", "pattern": "beat", "bar": 3 }
+  ],
+  "sections": [ { "name": "hook", "bar": 2, "bars": 2 } ]
+}
+</script>
+
+<script type="module">
+import { init, compileSong, playSong } from "./tono.js";
+
+const statusEl = document.getElementById("status");
+const positionEl = document.getElementById("position");
+const renderBtn = document.getElementById("render");
+const playBtn = document.getElementById("play");
+const hookBtn = document.getElementById("hook");
+const songJson = document.getElementById("song").textContent;
+const SAMPLE_RATE = 44100;
+
+const say = (text) => (statusEl.textContent = text);
+
+let program = null;
+let node = null;
+let positionTimer = null;
+
+function wavBlob(interleaved, sampleRate) {
+  const frames = interleaved.length >> 1;
+  const buffer = new ArrayBuffer(44 + frames * 4); // 16-bit stereo
+  const view = new DataView(buffer);
+  const writeStr = (offset, text) => {
+    for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + frames * 4, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true); // PCM chunk size
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 2, true); // stereo
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 4, true); // byte rate
+  view.setUint16(32, 4, true); // block align
+  view.setUint16(34, 16, true); // bits
+  writeStr(36, "data");
+  view.setUint32(40, frames * 4, true);
+  let offset = 44;
+  for (let i = 0; i < interleaved.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, interleaved[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+async function boot() {
+  try {
+    await init();
+    program = compileSong(songJson, SAMPLE_RATE);
+    const seconds = Number(program.frames()) / program.sampleRate();
+    say(
+      `compiled "${JSON.parse(songJson).name}"\n` +
+        `hash        ${program.hashHex()}\n` +
+        `duration    ${seconds.toFixed(2)} s (${program.frames()} frames @ ${program.sampleRate()} Hz)\n` +
+        `streamable  ${program.isStreamable()}`,
+    );
+    renderBtn.disabled = false;
+    playBtn.disabled = false;
+  } catch (err) {
+    // A failed compile throws an Error whose message is the diagnostics JSON.
+    let detail = err.message;
+    try {
+      detail = JSON.parse(err.message).map((d) => `${d.code} ${d.severity} ${d.path}: ${d.message}`).join("\n");
+    } catch {}
+    say(`failed:\n${detail}`);
+  }
+}
+
+renderBtn.addEventListener("click", () => {
+  const audio = program.render(); // stereo-interleaved, like fill()
+  const url = URL.createObjectURL(wavBlob(audio, program.sampleRate()));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "tono-wasm-demo.wav";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+playBtn.addEventListener("click", async () => {
+  if (node) {
+    node.performance.schedule({ stop: true });
+    node.disconnect();
+    node = null;
+    clearInterval(positionTimer);
+    playBtn.textContent = "▶ Play live";
+    hookBtn.disabled = true;
+    positionEl.textContent = "—";
+    return;
+  }
+  try {
+    node = await playSong(program); // creates its own AudioContext at the program rate
+    node.connect(node.context.destination);
+    playBtn.textContent = "■ Stop";
+    hookBtn.disabled = false;
+    positionTimer = setInterval(async () => {
+      if (!node) return;
+      const { state, positionBeats } = await node.performance.metrics();
+      positionEl.textContent = `${state} — beat ${positionBeats.toFixed(2)}`;
+    }, 250);
+  } catch (err) {
+    say(`playback failed:\n${err.message}`);
+    node = null;
+  }
+});
+
+hookBtn.addEventListener("click", () => {
+  // The JSON command grammar as JS objects: a quantized section transition.
+  node.performance.schedule({ seek_section: "hook" }, { next_bar: true });
+});
+
+boot();
+</script>
+</body>
+</html>
