@@ -25,13 +25,15 @@ project at once.
   construct that cannot stream is *reported* (`StreamGraph::blockers`),
   never silently approximated; the buffer-backed `Player` is the
   explicit fallback.
-- Until the deterministic-transcendental engine revision lands (planned
-  for v1.10.0-beta.1), byte-identity is **per platform**: platform libm
-  last bits differ between macOS-arm64 and linux-x86_64, so the corpus
-  carries per-platform pins. That revision replaces libm calls in the
-  deterministic path and fixes convolution/FFT operation ordering, after
-  which the corpus collapses to one cross-platform pin set. Existing
-  documents keep their per-platform revisions.
+- Until the deterministic-transcendental engine revision landed, byte-identity
+  was **per platform**: platform libm last bits differ between macOS-arm64
+  and linux-x86_64, so older revisions keep per-platform pins. **Engine
+  revision 5** closes that: the `det` kernels replace libm in the render
+  path, and convolution uses a fixed-order radix-2 FFT with a documented
+  power-of-two sizing rule. Engine ≥ 5 documents render identically on
+  every supported target; the corpus pins one value per engine-5 case and
+  asserts both platforms reproduce it. Documents pinned at older revisions
+  keep their historical per-platform renders.
 
 ## Consequences
 
