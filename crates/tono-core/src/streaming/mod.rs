@@ -38,7 +38,7 @@ mod source;
 pub(crate) mod value;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::fmt;
 

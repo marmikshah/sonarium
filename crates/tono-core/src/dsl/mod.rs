@@ -652,6 +652,51 @@ pub struct SeqNote {
     pub gain: f32,
 }
 
+/// A tempo change at an exact beat position (ADR 0002): from `at` until the
+/// next change, the tempo is `bpm`. In a [`Node::Seq`]'s `tempo_map` the
+/// first point must sit at beat 0 — an empty map is the constant-tempo
+/// `bpm` behavior, byte-identical to before the map existed.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct TempoPoint {
+    /// The exact beat the change takes effect at (a normalized rational —
+    /// tuplets and fractional bar lines stay exact).
+    pub at: crate::units::Beat,
+    /// The new tempo in beats per minute.
+    pub bpm: f32,
+}
+
+/// Seconds elapsed at `beat` under a tempo map — the segment walk in f64,
+/// the one conversion every tempo-aware path (renderer, compiler) shares
+/// (ADR 0002). Degenerate tempos floor at 1 BPM, like the seq's own clamp.
+/// The map must be non-empty and start at beat 0 (validation enforces both).
+pub fn tempo_map_seconds_at(map: &[TempoPoint], beat: f64) -> f64 {
+    let mut secs = 0.0;
+    let mut prev_beat = 0.0f64;
+    let mut bpm = (map[0].bpm as f64).max(1.0);
+    for p in &map[1..] {
+        let at = p.at.to_f64();
+        if beat <= at {
+            break;
+        }
+        secs += (at - prev_beat) * 60.0 / bpm;
+        prev_beat = at;
+        bpm = (p.bpm as f64).max(1.0);
+    }
+    secs + (beat - prev_beat) * 60.0 / bpm
+}
+
+/// The tempo in effect at `beat` under a tempo map (≥ 1 BPM, floored).
+pub fn tempo_map_bpm_at(map: &[TempoPoint], beat: f64) -> f64 {
+    let mut bpm = (map[0].bpm as f64).max(1.0);
+    for p in &map[1..] {
+        if beat < p.at.to_f64() {
+            break;
+        }
+        bpm = (p.bpm as f64).max(1.0);
+    }
+    bpm
+}
+
 impl SoundDoc {
     /// The schema version this document's render semantics follow (omitted ⇒ 1).
     pub fn effective_version(&self) -> u32 {

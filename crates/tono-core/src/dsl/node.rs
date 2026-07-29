@@ -2,8 +2,8 @@
 //! processor in the DSL — with its per-family serde defaults co-located.
 
 use super::{
-    Adsr, DriveShape, KitStyle, Mode, NoiseColor, SeqNote, SeqWave, SuperWave, Track, Value,
-    WavetableKind, default_gain,
+    Adsr, DriveShape, KitStyle, Mode, NoiseColor, SeqNote, SeqWave, SuperWave, TempoPoint, Track,
+    Value, WavetableKind, default_gain,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -267,6 +267,15 @@ pub enum Node {
     Seq {
         /// Tempo in beats per minute.
         bpm: f32,
+        /// Tempo changes on the beat grid at exact rational positions,
+        /// applied segment-wise (ADR 0002): a note's start and end convert to
+        /// seconds through the segments in f64 and land on frames with halves
+        /// rounded away from zero. Empty = the constant-tempo `bpm` behavior
+        /// — the only behavior documents had before this field existed, so
+        /// they render byte-identically. The first point must sit at beat 0.
+        /// Not supported on the `sampler` wave (validation rejects it).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tempo_map: Vec<TempoPoint>,
         /// Grid resolution: steps per beat (4 = sixteenth notes).
         #[serde(default = "default_steps_per_beat")]
         steps_per_beat: u32,

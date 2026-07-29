@@ -61,10 +61,26 @@ pub struct ProgramMeta {
     /// Tempo in beats per minute (clamped at compile, like the compiler's
     /// duration math: degenerate tempos floor at 1).
     pub tempo_bpm: f32,
-    /// Time-signature numerator (4 = 4/4).
+    /// Time-signature numerator (4 = 4/4) — the default meter before any
+    /// `meter_map` points.
     pub beats_per_bar: u32,
     /// Grid resolution (4 = sixteenth notes).
     pub steps_per_beat: u32,
+    /// Tempo changes at exact beat positions (empty = constant `tempo_bpm`).
+    #[serde(default)]
+    pub tempo_map: Vec<crate::dsl::TempoPoint>,
+    /// Time-signature changes by bar (empty = `beats_per_bar`/4 throughout).
+    #[serde(default)]
+    pub meter_map: Vec<crate::song::MeterPoint>,
+    /// The pickup bar's length in beats, if any.
+    #[serde(default)]
+    pub pickup: Option<crate::units::Beat>,
+    /// Named bar ranges, sorted by bar — the runtime's transition targets.
+    #[serde(default)]
+    pub sections: Vec<crate::song::Section>,
+    /// Named beat points, sorted by position.
+    #[serde(default)]
+    pub markers: Vec<crate::song::Marker>,
     /// The song's length in bars (end of its last placement or direct note).
     pub length_bars: u32,
     /// Total duration in seconds, including the release/reverb tail.
