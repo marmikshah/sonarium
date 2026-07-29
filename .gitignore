@@ -4,8 +4,9 @@
 *.swp
 /crates/tono-desktop/gen/
 
-# A library resolves at the consumer's end, so the lockfile is not committed.
-/Cargo.lock
+# The workspace lockfile IS committed (issue #52, WS9): CI and releases
+# resolve with --locked so a build is exactly what the tag says it is.
+# (Libraries resolve at the consumer's end regardless; this pins OUR builds.)
 
 # Python byproducts: `maturin develop` drops the extension next to the sources
 # (and a stale one there would leak into the wheel), tests write __pycache__.

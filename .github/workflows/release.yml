@@ -102,7 +102,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Build the CLI
-        run: cargo build --release --bin tono --target ${{ matrix.target }}
+        run: cargo build --locked --release --bin tono --target ${{ matrix.target }}
       - name: Package with checksum (unix)
         if: matrix.os != 'windows-latest'
         run: |

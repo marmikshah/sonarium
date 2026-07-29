@@ -76,7 +76,7 @@ wasm: ## Build the WASM face (tono-wasm) → crates/tono-wasm/pkg — off the de
 	fi
 
 test: ## Run the test suite
-	cargo test
+	cargo test --locked
 
 bench: ## Criterion benchmarks for the tono-core render hot path (report-only; NOT part of 'make verify')
 	cargo bench -p tono-core
@@ -85,13 +85,13 @@ fmt: ## Format all sources
 	cargo fmt --all
 
 lint: ## Clippy with warnings denied
-	cargo clippy --all-targets -- -D warnings
+	cargo clippy --locked --all-targets -- -D warnings
 
 check: fmt lint test ## Pre-commit gate (mutating): format + clippy + tests
 
 pre-commit-checks: ## CI lint gate (non-mutating): fmt --check + clippy. Pair with 'make test'.
 	cargo fmt --all -- --check
-	cargo clippy --all-targets -- -D warnings
+	cargo clippy --locked --all-targets -- -D warnings
 
 verify: pre-commit-checks test ## Exactly what CI runs (fmt --check + clippy + test) - non-mutating
 
@@ -105,8 +105,8 @@ version: ## Print the workspace version (the single version parser — release +
 	@sed -n '/^\[workspace\.package\]/,/^\[/ s/^version = "\([^"]*\)".*/\1/p' Cargo.toml
 
 verify-native: ## Lint + test the off-CI native crates (desktop/play/py); --all-targets compiles their examples too
-	cargo clippy -p tono-desktop -p tono-play -p tono-py --all-targets -- -D warnings
-	cargo test -p tono-desktop -p tono-play
+	cargo clippy --locked -p tono-desktop -p tono-play -p tono-py --all-targets -- -D warnings
+	cargo test --locked -p tono-desktop -p tono-play
 
 release: ## Cut a release: guard clean master, tag vX.Y.Z from Cargo.toml, push (CI publishes to crates.io)
 	@[ "$$(git branch --show-current)" = "$(RELEASE_BRANCH)" ] || { echo "Release only from $(RELEASE_BRANCH)."; exit 1; }
