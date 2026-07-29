@@ -34,6 +34,8 @@ pub fn inspect_json(program: &Program) -> serde_json::Value {
         "program_version": program.program_version,
         "schema_version": program.schema_version,
         "engine_version": program.engine_version,
+        "target": program.target,
+        "capabilities": program.capabilities(),
         "tempo_bpm": meta.tempo_bpm,
         "beats_per_bar": meta.beats_per_bar,
         "steps_per_beat": meta.steps_per_beat,

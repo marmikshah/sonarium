@@ -17,7 +17,8 @@ use crate::units::Beat;
 /// produce the same artifact — the choice documents intent and surfaces the
 /// same streaming-coverage warnings either way; from alpha.3 the runtime
 /// target gates capability checks.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CompileTarget {
     /// Offline rendering (mix, ranges, stems).
     #[default]
@@ -410,6 +411,7 @@ impl Song {
             schema_version: doc.effective_version(),
             engine_version: doc.effective_engine(),
             hash,
+            target: opts.target,
             doc,
             meta,
             estimates,
