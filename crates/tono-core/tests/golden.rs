@@ -388,6 +388,25 @@ const CORPUS: &[Case] = &[
         mac: (0x93bbbd9fe2057929, None),
         linux: None,
     },
+    Case {
+        // Step and exp automation curves on one track.
+        name: "tracks-automation-curves",
+        json: r#"{ "name": "tracks-automation-curves", "duration": 1.0, "seed": 9, "version": 2, "engine": 4,
+            "root": { "type": "tracks", "tracks": [
+                { "id": "pad", "node": { "type": "sawtooth", "freq": 220 }, "gain": 0.5,
+                  "automation": [
+                    { "target": "gain", "curve": "exp", "points": [
+                        { "t": 0.0, "v": 0.2 }, { "t": 0.6, "v": 0.9 } ] },
+                    { "target": "pan", "curve": "step", "points": [
+                        { "t": 0.0, "v": -0.5 }, { "t": 0.5, "v": 0.5 } ] }
+                  ] }
+            ] } }"#,
+        mac: (
+            0xecd8fea88e3d1125,
+            Some((0xc9d8d2534019a40a, 0xdc1a60d87163b2be)),
+        ),
+        linux: None,
+    },
 ];
 
 /// Song fluent path golden: the arrangement layer compiles through `to_doc`

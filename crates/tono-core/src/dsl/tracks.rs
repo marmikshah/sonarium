@@ -96,9 +96,27 @@ pub enum AutoTarget {
     Pan,
 }
 
+/// How an automation lane interpolates between its breakpoints.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoCurve {
+    /// Straight-line segments (default — the only behavior documents had
+    /// before this field existed, so they render byte-identically).
+    #[default]
+    Linear,
+    /// Hold the previous breakpoint's value until the next one lands (a
+    /// stepped ride — fader moves without ramps).
+    Step,
+    /// Exponential approach per segment: `v0 · (v1/v0)^u` while both
+    /// endpoints are positive (natural-feeling swells and fades); any other
+    /// segment falls back to linear — deterministic, and documented.
+    Exp,
+}
+
 /// One breakpoint in an automation lane: value `v` at song time `t` seconds.
-/// Between breakpoints the value is linearly interpolated; before the first /
-/// after the last it holds flat.
+/// Between breakpoints the value follows the lane's `curve`; before the
+/// first / after the last it holds flat.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AutoPoint {
     /// Song time in seconds.
@@ -112,6 +130,9 @@ pub struct AutoPoint {
 pub struct AutoLane {
     /// What this lane controls.
     pub target: AutoTarget,
+    /// The interpolation between breakpoints (default linear).
+    #[serde(default)]
+    pub curve: AutoCurve,
     /// Breakpoints over song time.
     pub points: Vec<AutoPoint>,
 }
