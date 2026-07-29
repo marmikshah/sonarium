@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 1.10.0 — 2026-07-29
+
+tono becomes a production-grade music-as-code platform: compose full songs in
+idiomatic Rust or Python, compile them once into a hashed, validated Program,
+render the mix or stems offline, and run the same Program through a
+sample-accurate scheduled runtime — all byte-identical, everywhere. Engine
+revision 5 retires the per-platform determinism limitation: documents stamped
+`engine: 5` render bit-for-bit on every supported target (older revisions are
+untouched forever). The faces multiply: a typed Python API with py.typed and
+wheels, a stable C ABI, a WASM + AudioWorklet runtime, prebuilt CLI binaries,
+and the typed Song/Pattern/Program/Performance API frozen stable as of rc.1 —
+see docs/release-gates.md for the full gate walk and docs/migration.md to
+move existing work forward.
 
 ### Changed
 - **The composition API is frozen (rc.1).** Every release gate in issue #52
