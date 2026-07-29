@@ -72,12 +72,15 @@ renders — gate byte-changing kernel upgrades behind the document `engine`
 revision. The real-time audition path must stay byte-identical to an offline
 bounce.
 
-Known limitation: byte-identity currently holds **per platform**. The DSP calls
-platform libm (`sin`/`cos`/`exp`/`powf`), whose last bits differ between
-macOS-arm64 and linux-x86_64, so the golden pins are per-platform (integer-RNG /
-PolyBLEP / rational-filter content is identical everywhere; transcendental
-content is not). Making the invariant truly cross-platform means deterministic
-transcendental kernels behind a future engine revision.
+Known limitation, retired: byte-identity **was** per-platform for documents
+pinned at engine revisions ≤ 4 (platform libm's last bits differ between
+macOS-arm64 and linux-x86_64), so the corpus pins those revisions
+per-platform. **Engine revision 5** renders through the deterministic `det`
+kernels (`crates/tono-core/src/det.rs`) and a fixed-order FFT — documents
+stamped `engine: 5` are byte-identical on every supported target, and the
+corpus asserts one shared pin set for them in CI. New documents and songs
+stamp 5 by default; older documents keep their historical per-platform
+renders forever.
 
 ## Build / test
 

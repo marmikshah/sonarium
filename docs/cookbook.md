@@ -571,8 +571,14 @@ current engine and get the upgrades. The revisions so far:
   per-partial decay, hammer spectrum, detuned unison pair).
 - **4** — corrected mixer output stage (joint stereo loudness normalization,
   gated BS.1770, oversampled true-peak) and per-note humanize jitter.
+- **5** — deterministic transcendental kernels (`det`: fdlibm-grade sin/cos/
+  exp/ln/powf/tanh in pure f64) replace platform libm everywhere in the
+  render path, and convolution runs a fixed-order radix-2 FFT with
+  deterministic twiddles and power-of-two sizing. The payoff: **a document
+  stamped `engine: 5` renders byte-identically on every platform** — no more
+  per-platform pins. New documents and songs stamp 5 by default.
 
-To modernise an existing sound, set `"engine": 4` (the current revision — its
+To modernise an existing sound, set `"engine": 5` (the current revision — its
 output will change; that's the point); to keep a legacy sound bit-exact, leave
 `engine` off.
 

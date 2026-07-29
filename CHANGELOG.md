@@ -30,6 +30,24 @@
   tail); it now drains the exact tail once the producer is finished.
 
 ### Added
+- **Engine revision 5 — cross-platform byte-identity** (beta.1, issue #52):
+  the per-platform libm limitation is retired. New `det` kernels
+  (fdlibm-grade `sin`/`cos`/`exp`/`ln`/`powf`/`tanh`/`log10` in pure IEEE
+  f64, correctly rounded to f32) drive every transcendental in the render
+  path for documents stamped `engine: 5`, and convolution runs a
+  fixed-order radix-2 FFT with deterministic twiddles and documented
+  power-of-two sizing — output is identical on every supported target by
+  construction. Older revisions render bit-for-bit as before (their corpus
+  pins are untouched); new documents and songs stamp 5 by default. The
+  golden corpus now asserts one shared pin set for engine-5 cases on both
+  macOS-arm64 and linux-x86_64, every CI run.
+- **Program bundles carry target and capability metadata** — a Program
+  records its compile target and answers a machine-readable capability
+  list ("offline-render", "stems", "streaming"), derived from the
+  document, and `tono compile --inspect` prints both.
+- **Prebuilt CLI binaries** — every release tag builds `tono` for
+  linux-x86_64, macos-aarch64, and windows-x86_64 with sha256 sidecars,
+  uploaded to the GitHub Release.
 - **The tono C ABI (`tono-capi`)** (beta.1, issue #52): a stable `extern "C"`
   surface for native hosts — validate a SoundDoc, load a compiled Program
   bundle, render it to stereo, and run it through a Performance
