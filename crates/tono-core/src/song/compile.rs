@@ -3,7 +3,7 @@
 //! [`Song::compile`] — the full validation + lowering entry point that
 //! returns an immutable [`Program`] (ADR 0003).
 
-use super::{MeterPoint, Song, SongError, SongTrack};
+use super::{Song, SongError, SongTrack};
 use crate::diag::{CompileError, Diagnostic};
 use crate::dsl::{ENGINE_VERSION, Node, SeqNote, SoundDoc, Track};
 use crate::ids::TrackId;
@@ -90,30 +90,10 @@ impl Song {
         from_patterns.max(from_notes)
     }
 
-    /// Bars elapsed at `beat` under the meter map — the bar-count analog of
-    /// `div_ceil` for a plain meter (binary search over the monotonic beat
-    /// walk; saturates at absurd inputs).
+    /// Bars elapsed at `beat` under the meter map — the shared walk
+    /// ([`crate::units::bar_count_at_beat`]).
     fn bar_count_at_beat(&self, beat: Beat) -> u32 {
-        if beat <= Beat::zero() {
-            return 0;
-        }
-        let mut lo = 0u32; // beat_at_bar(lo) < beat
-        let mut hi = 1u32; // doubled until beat_at_bar(hi) >= beat
-        while self.beat_at_bar(hi) < beat {
-            hi = hi.saturating_mul(2);
-            if hi == u32::MAX {
-                return hi;
-            }
-        }
-        while lo + 1 < hi {
-            let mid = lo + (hi - lo) / 2;
-            if self.beat_at_bar(mid) < beat {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        }
-        hi
+        crate::units::bar_count_at_beat(&self.meter_map, self.beats_per_bar, self.pickup, beat)
     }
 
     /// Steps per bar, degenerate (zero) fields floored to 1 — the one formula
@@ -129,64 +109,11 @@ impl Song {
         self.meter_map.is_empty() && self.pickup.is_none()
     }
 
-    /// The meter in effect at `bar` (the last map point at or before it).
-    fn meter_at(&self, bar: u32) -> MeterPoint {
-        let fallback = MeterPoint {
-            bar: 0,
-            numerator: self.beats_per_bar.max(1),
-            denominator: 4,
-        };
-        self.meter_map
-            .iter()
-            .rev()
-            .find(|p| p.bar <= bar)
-            .copied()
-            .unwrap_or(fallback)
-    }
-
-    /// The length of bar `index` in quarter-note beats: the pickup for bar 0
-    /// when set, otherwise the meter in effect (`numerator × 4/denominator`).
-    fn bar_len(&self, index: u32) -> Beat {
-        if index == 0
-            && let Some(pickup) = self.pickup
-        {
-            return pickup;
-        }
-        let meter = self.meter_at(index);
-        Beat::new(meter.numerator as i64 * 4, meter.denominator)
-    }
-
     /// The exact beat `bar` starts at — the pickup plus the meter walk,
-    /// segment-wise (the map is short, so a pathological bar costs O(map),
-    /// not O(bar)). Saturates rather than wraps at absurd bars.
+    /// segment-wise. The shared walk ([`crate::units::beat_at_bar`]) every
+    /// tempo-aware path (compiler, transport) uses, so they never disagree.
     pub fn beat_at_bar(&self, bar: u32) -> Beat {
-        let mut beats = Beat::zero();
-        if bar == 0 {
-            return beats;
-        }
-        // Bar 0 — possibly the pickup bar.
-        beats = beats
-            .checked_add(self.bar_len(0))
-            .unwrap_or(Beat::new(i64::MAX, 1));
-        // Bars 1..bar, walked segment-wise by the meter map.
-        let mut i = 1u32;
-        while i < bar {
-            let seg_end = self
-                .meter_map
-                .iter()
-                .map(|p| p.bar)
-                .filter(|b| *b > i)
-                .min()
-                .unwrap_or(u32::MAX)
-                .min(bar);
-            let span = self
-                .bar_len(i)
-                .scale(i64::from(seg_end - i))
-                .unwrap_or(Beat::new(i64::MAX, 1));
-            beats = beats.checked_add(span).unwrap_or(Beat::new(i64::MAX, 1));
-            i = seg_end;
-        }
-        beats
+        crate::units::beat_at_bar(&self.meter_map, self.beats_per_bar, self.pickup, bar)
     }
 
     /// A beat position to a grid step, erroring when it lands between steps
@@ -767,6 +694,7 @@ mod tests {
     use super::*;
     use crate::dsl::{Adsr, SeqWave};
     use crate::song::note;
+    use crate::units::MeterPoint;
 
     fn amp() -> Adsr {
         Adsr {

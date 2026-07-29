@@ -37,6 +37,7 @@ mod engine;
 mod mixer;
 mod ring;
 mod source;
+mod transport;
 
 /// Pre-allocated scratch depth (frames) shared by the runtime's `fill` paths
 /// ([`Engine`], [`Mixer`], [`StreamSource`]): covers any host block up to this
@@ -48,6 +49,7 @@ pub use engine::{Engine, InstanceHandle, LayerId, ParamId, PatchId, Priority, Tw
 pub use mixer::{BusId, Mixer, MixerError, SourceId};
 pub use ring::{Controller, Pump, Renderer, spsc};
 pub use source::{AudioSource, StreamSource, write_interleaved};
+pub use transport::{Advance, Transport, TransportState};
 
 #[cfg(test)]
 mod tests;
