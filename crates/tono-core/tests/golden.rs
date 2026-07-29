@@ -435,6 +435,96 @@ const CORPUS: &[Case] = &[
             Some((0x34ede9f0b825bda8, 0xd23834683363d62b)),
         )),
     },
+    // Engine revision 5: the deterministic kernels render identically on
+    // every platform — these cases pin ONE value and `linux: None` asserts
+    // the linux build reproduces it exactly (the CI proof of cross-platform
+    // byte-identity).
+    Case {
+        name: "v5-sine-fm-bell",
+        json: r#"{ "name": "v5-sine-fm-bell", "duration": 0.3, "engine": 5,
+            "root": { "type": "fm", "freq": 660, "ratio": 3.5,
+                "index": { "slide": { "from": 6, "to": 0.5, "secs": 0.25 } } } }"#,
+        mac: (0x3325c108bf2a0572, None),
+        linux: None,
+    },
+    Case {
+        name: "v5-kit-groove",
+        json: r#"{ "name": "v5-kit-groove", "duration": 0.5, "seed": 5, "engine": 5,
+            "root": { "type": "seq", "bpm": 240, "wave": "kit", "kit": "808",
+                "env": { "a": 0.001, "d": 0.1, "s": 0.5, "r": 0.1 },
+                "notes": [
+                    { "step": 0, "len": 1, "pitch": "midi:36" },
+                    { "step": 2, "len": 1, "pitch": "midi:38", "gain": 0.9 },
+                    { "step": 4, "len": 1, "pitch": "midi:42", "gain": 0.6 },
+                    { "step": 6, "len": 1, "pitch": "midi:46", "gain": 0.7 } ] } }"#,
+        mac: (0xaa7274eaf29a3da9, None),
+        linux: None,
+    },
+    Case {
+        name: "v5-convolve-space",
+        json: r#"{ "name": "v5-convolve-space", "duration": 0.5, "seed": 4, "engine": 5,
+            "root": { "type": "chain", "stages": [
+                { "type": "mul", "inputs": [
+                    { "type": "noise", "color": "white" },
+                    { "type": "env", "a": 0.001, "d": 0.02, "s": 0.0, "r": 0.01 } ] },
+                { "type": "convolve", "decay": 0.25, "predelay": 0.01, "damp": 0.5, "mix": 0.45 } ] } }"#,
+        mac: (0x870954514442334e, None),
+        linux: None,
+    },
+    Case {
+        name: "v5-granular-cloud",
+        json: r#"{ "name": "v5-granular-cloud", "duration": 0.4, "seed": 8, "engine": 5,
+            "root": { "type": "chain", "stages": [
+                { "type": "sine", "freq": 220 },
+                { "type": "granular", "grain_ms": 40, "density": 25, "pitch": 2.0,
+                    "spread": 0.3, "mix": 0.7 } ] } }"#,
+        mac: (0xc67f6bf629bd6010, None),
+        linux: None,
+    },
+    Case {
+        name: "v5-drive-normalize",
+        json: r#"{ "name": "v5-drive-normalize", "duration": 0.4, "engine": 5,
+            "normalize": { "target_lufs": -16, "ceiling_dbtp": -1.0 },
+            "root": { "type": "chain", "stages": [
+                { "type": "sawtooth", "freq": 110 },
+                { "type": "drive", "amount": 0.6, "shape": "tanh" } ] } }"#,
+        mac: (0x63a011a7a2370c5a, None),
+        linux: None,
+    },
+    Case {
+        // The representative composition: tempo map + automation + sidechain
+        // + bus, all through the det kernels.
+        name: "v5-tracks-composition",
+        json: r#"{ "name": "v5-tracks-composition", "duration": 1.0, "seed": 6, "engine": 5,
+            "root": { "type": "tracks",
+                "buses": [ { "id": "verb", "gain": 0.8, "effects": [
+                    { "type": "reverb", "room": 0.5, "mix": 0.5 } ] } ],
+                "tracks": [
+                    { "id": "kick", "node": { "type": "seq", "bpm": 120, "wave": "kit", "kit": "808",
+                        "tempo_map": [ { "at": { "num": 0, "den": 1 }, "bpm": 120 },
+                                       { "at": { "num": 2, "den": 1 }, "bpm": 132 } ],
+                        "env": { "a": 0.001, "d": 0.1, "s": 0.5, "r": 0.1 },
+                        "notes": [ { "step": 0, "len": 1, "pitch": "midi:36" },
+                                   { "step": 4, "len": 1, "pitch": "midi:36" },
+                                   { "step": 8, "len": 1, "pitch": "midi:36" } ] },
+                      "sends": [ { "bus": "verb", "amount": 0.3 } ] },
+                    { "id": "bass", "node": { "type": "seq", "bpm": 120, "wave": "sawtooth",
+                        "tempo_map": [ { "at": { "num": 0, "den": 1 }, "bpm": 120 },
+                                       { "at": { "num": 2, "den": 1 }, "bpm": 132 } ],
+                        "env": { "a": 0.005, "d": 0.05, "s": 0.8, "r": 0.05 },
+                        "notes": [ { "step": 0, "len": 12, "pitch": "C2" } ] },
+                      "sidechain": { "source": "kick", "amount": 0.8, "attack": 0.005, "release": 0.15 },
+                      "automation": [ { "target": "gain", "curve": "exp", "points": [
+                          { "t": 0.0, "v": 0.6 }, { "t": 0.5, "v": 0.9 } ] } ] },
+                    { "id": "pad", "node": { "type": "sine", "freq": 220 }, "gain": 0.3,
+                      "pan": 0.4, "bus": "verb" }
+                ] } }"#,
+        mac: (
+            0x02fa7bbcf523b351,
+            Some((0x93b3e8aad2483b3b, 0x88a1927a2dd38307)),
+        ),
+        linux: None,
+    },
 ];
 
 /// Song fluent path golden: the arrangement layer compiles through `to_doc`
