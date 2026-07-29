@@ -669,13 +669,20 @@ fn spsc_threaded_pump_and_drain_is_byte_identical() {
     });
     let mut got = Vec::with_capacity(total * 2);
     while got.len() < total * 2 {
-        // Wait for a full block so an underrun can't insert fake silence.
-        while rend.ring.len() < 192 * 2 {
+        // Wait for a full block so an underrun can't insert fake silence —
+        // but once the producer is done, drain the exact tail: `total` isn't
+        // a multiple of the block, so demanding full blocks to the end can
+        // starve the last partial one (a hang under load, when backpressure
+        // shaved the final pumps down to exactly `total`).
+        let avail = rend.ring.len();
+        if avail >= 192 * 2 || (avail >= 2 && producer.is_finished()) {
+            let n = (total * 2 - got.len()).min(if avail >= 192 * 2 { 192 * 2 } else { avail });
+            let mut block = vec![0.0f32; n];
+            rend.fill(&mut block);
+            got.extend_from_slice(&block);
+        } else {
             std::thread::yield_now();
         }
-        let mut block = vec![0.0f32; 192 * 2];
-        rend.fill(&mut block);
-        got.extend_from_slice(&block);
     }
     producer.join().unwrap();
     assert_eq!(
