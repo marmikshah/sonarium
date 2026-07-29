@@ -62,10 +62,12 @@ pub mod adaptive;
 #[cfg(feature = "analysis")]
 pub mod analysis;
 pub mod catalog;
+pub mod diag;
 pub mod drumkit;
 pub mod dsl;
 pub mod dsp;
 pub mod edit;
+pub mod ids;
 pub mod instrument;
 pub mod patch;
 pub mod player;
@@ -76,11 +78,12 @@ pub mod review;
 pub mod runtime;
 pub mod song;
 pub mod streaming;
+pub mod units;
 pub mod vary;
 
 /// The workhorse names in one import: `use tono_core::prelude::*;` covers the
 /// primary flow (author a doc or a [`song::Song`], render it, analyze it, play
-/// it) without hunting across the crate's nineteen modules.
+/// it) without hunting across the crate's twenty-two modules.
 pub mod prelude {
     pub use crate::adaptive::{AdaptiveMusic, LoopBuffer, Quantize};
     #[cfg(feature = "analysis")]
@@ -88,6 +91,7 @@ pub mod prelude {
     pub use crate::catalog::{
         Bass, Drums, ElectricPiano, GrandPiano, Guitar, Organ, Strings, Voice,
     };
+    pub use crate::diag::{CompileError, Diagnostic, Severity};
     pub use crate::dsl::{Adsr, ENGINE_VERSION, Node, SeqNote, SeqWave, SoundDoc, Value};
     pub use crate::instrument::{Instrument, InstrumentDesign, Note};
     pub use crate::patch::Patch;
@@ -96,4 +100,5 @@ pub mod prelude {
         AudioSource, Engine, InstanceHandle, Mixer, PatchId, Priority, StreamSource, Tween,
     };
     pub use crate::song::{Song, note, note_vel};
+    pub use crate::units::{Beat, Frames, SampleRate, Tempo, beat_to_frames};
 }
