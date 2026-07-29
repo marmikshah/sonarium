@@ -877,12 +877,38 @@ mod tests {
     }
 
     #[test]
-    fn a_tracks_root_warns_it_does_not_stream_natively() {
+    fn a_streamable_tracks_root_compiles_without_warnings() {
+        // A plain compiled song is a schema-v2 mixer whose parts all stream
+        // (built-in seq waves, no master chain): no TracksRoot warning, and
+        // is_streamable follows.
         let program = demo_song().compile(&CompileOptions::default()).unwrap();
+        assert!(
+            program.is_streamable(),
+            "a plain compiled song streams natively now: {:?}",
+            program.warnings
+        );
+        assert!(program.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_tracks_root_with_an_unstreamable_part_still_warns() {
+        // A master-chain convolve can't stream — the program keeps the
+        // warning (and the Player fallback), now naming the failing part.
+        let mut song = demo_song();
+        song.master.push(
+            serde_json::from_value(
+                serde_json::json!({ "type": "convolve", "decay": 0.6, "mix": 0.4 }),
+            )
+            .unwrap(),
+        );
+        let program = song.compile(&CompileOptions::default()).unwrap();
         assert!(!program.is_streamable());
         assert!(
-            program.warnings.iter().any(|d| d.code == "T1504"),
-            "the tracks-root blocker is a warning, not a failure: {:?}",
+            program
+                .warnings
+                .iter()
+                .any(|d| d.code == "T1508" && d.message.contains("the master chain")),
+            "the master-chain blocker is a warning with its context: {:?}",
             program.warnings
         );
         assert!(

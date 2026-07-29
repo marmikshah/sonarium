@@ -136,13 +136,16 @@ mod tests {
         assert_eq!(inspect["tracks"][0]["name"], "bass");
         assert_eq!(inspect["tracks"][0]["id"], 1);
         assert_eq!(inspect["estimates"]["events"], 1);
-        assert!(
-            inspect["warnings"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|w| w["code"] == "T1504"),
-            "the tracks-root streaming blocker is reported: {inspect}"
+        // A plain compiled song (schema v2, built-in waves) streams natively.
+        assert_eq!(
+            inspect["streamable"].as_bool(),
+            Some(true),
+            "the demo song is streamable: {inspect}"
+        );
+        assert_eq!(
+            inspect["warnings"].as_array().unwrap().len(),
+            0,
+            "no streaming blockers: {inspect}"
         );
         // Round-trips through a JSON parser losslessly (the CLI prints this).
         let reparsed: serde_json::Value =
