@@ -109,6 +109,50 @@ partial longer). Paths are the same ones `tono_core::edit::describe` / `apply_op
 an agent can design the sound in the studio, read off the paths, and emit the
 patch. A worked example: [`docs/examples/parametric-impact.patch.json`](examples/parametric-impact.patch.json).
 
+## Running a compiled song — `Performance`
+
+A compiled `Program` runs through a **`Performance`**: a sample-accurate
+transport plus a bounded, submission-ordered command queue, so musical
+scheduling never depends on Python, a game loop, or an OS timer waking on
+the boundary. Commands carry musical positions (beats, bars, markers,
+section names) resolved to exact frames at schedule time, and execute at
+those frames — with deterministic ordering for identical timestamps and a
+defined rejection when the queue is full:
+
+```rust
+let mut perf = tono_core::runtime::Performance::new(program.into());
+perf.schedule(tono_core::runtime::Command::Play, tono_core::runtime::At::Immediate)?;
+perf.schedule(tono_core::runtime::Command::SetGain(0.8), tono_core::runtime::At::NextBar)?;
+perf.transition_to_section("chorus", tono_core::runtime::At::NextBar)?;
+// perf.fill(&mut block) on the render side — commands land on exact frames.
+```
+
+- **Transport**: play/pause/stop, seeks by frame/beat/bar, loop ranges by
+  frames or bars; position reads back as frames, beats, or bars — the same
+  exact walks the compiler used, so they can't disagree.
+- **Playback**: native streaming for schema-v2 `tracks` programs
+  (byte-identical to the offline bounce at any block size — automation,
+  sidechains, buses and all); everything else plays the pre-rendered
+  bounce. Seeks rebuild deterministically.
+- **Swaps and stingers**: a program swap crossfades at a frame, beat, bar,
+  or section boundary — a rejected target keeps the last valid program
+  running. Stingers load at schedule time (never on the render path).
+- **Metrics**: frames rendered, commands executed/dropped, max queue depth,
+  swaps, stingers — read off the audio callback with no formatting or
+  allocation on it.
+- **Replay**: `start_capture`/`stop_capture` records timestamped commands;
+  replaying them reproduces the take bit-for-bit.
+
+How far ahead should a host schedule? The queue executes at exact frames in
+the rendered stream, so the only requirement is that commands arrive before
+the render reaches them — schedule at least one pump quantum (plus the ring
+depth, for split/threaded use) ahead of the musical point; anything more is
+free.
+
+Python gets the same surface as `tono.Performance` — live (speaker) or
+`headless=True` for tests and servers (`.fill(frames)` renders manually),
+with `tono.next_bar()`-style scheduling helpers.
+
 ## Where it runs
 
 `tono-core` is pure (no I/O, no transport — apart from the opt-in `sampler`
