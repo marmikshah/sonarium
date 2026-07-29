@@ -7,18 +7,19 @@
 //! gate exists to prevent — fails CI instead of silently breaking every
 //! existing user document.
 //!
-//! ## Known limitation: byte-identity is per-platform
+//! ## Known limitation: byte-identity is per-platform (engine ≤ 4)
 //!
-//! The DSP calls platform libm (`sin`/`cos`/`exp`/`powf`/`tanh`), whose last
-//! bits differ between macOS-arm64 and linux-x86_64 — pinning this corpus is
-//! what surfaced it. Documents built purely from integer RNG, polynomial
-//! oscillators (PolyBLEP saw/square), and rational filter math replay
-//! identically across platforms; sine/FM/piano/bass/kit content does not.
-//! So each case carries reference pins (macOS aarch64, where the corpus was
-//! authored) plus linux-x86_64 overrides where libm makes them differ; other
-//! platforms only check in-process determinism. Making the invariant truly
-//! cross-platform means deterministic transcendental kernels behind a future
-//! engine revision.
+//! Engine ≤ 4 documents call platform libm (`sin`/`cos`/`exp`/`powf`/`tanh`),
+//! whose last bits differ between macOS-arm64 and linux-x86_64 — pinning this
+//! corpus is what surfaced it. Documents built purely from integer RNG,
+//! polynomial oscillators (PolyBLEP saw/square), and rational filter math
+//! replay identically across platforms; sine/FM/piano/bass/kit content does
+//! not. So each engine ≤ 4 case carries reference pins (macOS aarch64, where
+//! the corpus was authored) plus linux-x86_64 overrides where libm makes them
+//! differ; other platforms only check in-process determinism. Engine ≥ 5
+//! documents evaluate every transcendental through the deterministic `det`
+//! kernels (ADR 0001) and pin ONE cross-platform value (no overrides) — the
+//! `fluent-song` case is the first of those.
 //!
 //! When a mismatch is *intentional* (a new engine revision changing only docs
 //! that opt in), re-pin by running:
@@ -463,14 +464,14 @@ fn fluent_song_doc() -> SoundDoc {
 const FLUENT_SONG: Case = Case {
     name: "fluent-song",
     json: "", // built through the Song API, not JSON
+    // Song::new pins the CURRENT engine at creation, so this case follows the
+    // engine revisions: it now renders at engine 5 — byte-identical across
+    // platforms by construction (det kernels), hence no linux override.
     mac: (
-        0x2184e2154f5b92e6,
-        Some((0x2184e2154f5b92e6, 0x2184e2154f5b92e6)),
+        0x79300bb0bdc42518,
+        Some((0x79300bb0bdc42518, 0x79300bb0bdc42518)),
     ),
-    linux: Some((
-        0xa940563791f3bcf2,
-        Some((0xa940563791f3bcf2, 0xa940563791f3bcf2)),
-    )),
+    linux: None,
 };
 
 fn check(c: &Case, doc: &SoundDoc) -> Option<String> {

@@ -427,13 +427,13 @@ fn drive_hard_clips_to_unit_range() {
 fn drive_fold_terminates_on_any_input() {
     // The fold loop runs per sample on the real-time path: a non-finite
     // input must not hang it, and huge amplitudes must stay bounded.
-    assert_eq!(drive_curve(f32::NAN, DriveShape::Fold), 0.0);
-    assert_eq!(drive_curve(f32::INFINITY, DriveShape::Fold), 0.0);
-    assert_eq!(drive_curve(f32::NEG_INFINITY, DriveShape::Fold), 0.0);
-    assert!((-1.0..=1.0).contains(&drive_curve(1.0e9, DriveShape::Fold)));
+    assert_eq!(drive_curve(f32::NAN, DriveShape::Fold, 0), 0.0);
+    assert_eq!(drive_curve(f32::INFINITY, DriveShape::Fold, 0), 0.0);
+    assert_eq!(drive_curve(f32::NEG_INFINITY, DriveShape::Fold, 0), 0.0);
+    assert!((-1.0..=1.0).contains(&drive_curve(1.0e9, DriveShape::Fold, 0)));
     // Realistic inputs keep the exact reflection behavior.
-    assert_eq!(drive_curve(1.5, DriveShape::Fold), 0.5);
-    assert_eq!(drive_curve(-1.5, DriveShape::Fold), -0.5);
+    assert_eq!(drive_curve(1.5, DriveShape::Fold, 0), 0.5);
+    assert_eq!(drive_curve(-1.5, DriveShape::Fold, 0), -0.5);
 }
 
 #[test]
@@ -443,8 +443,9 @@ fn drive_antiderivative_matches_its_curve() {
     let h = 1e-3f32;
     for shape in [DriveShape::Tanh, DriveShape::Hard, DriveShape::Fold] {
         for &x in &[-3.5f32, -1.2, -0.4, 0.0, 0.6, 1.5, 4.2] {
-            let num = (drive_antideriv(x + h, shape) - drive_antideriv(x - h, shape)) / (2.0 * h);
-            let exact = drive_curve(x, shape);
+            let num =
+                (drive_antideriv(x + h, shape, 0) - drive_antideriv(x - h, shape, 0)) / (2.0 * h);
+            let exact = drive_curve(x, shape, 0);
             assert!(
                 (num - exact).abs() < 5e-3,
                 "{shape:?} at x={x}: dF/dx={num} vs f={exact}"
@@ -481,11 +482,11 @@ fn adaa_engages_only_under_engine_1() {
             0,
             0,
         );
-        let amt = eval_value(&Value::Const(6.0), n, 44_100);
+        let amt = eval_value(&Value::Const(6.0), n, 44_100, 0);
         let raw: Vec<f32> = sine
             .iter()
             .zip(amt)
-            .map(|(x, a)| drive_curve(a.max(0.0) * x, DriveShape::Fold))
+            .map(|(x, a)| drive_curve(a.max(0.0) * x, DriveShape::Fold, 0))
             .collect();
         // render() applies the default peak-limit; mirror it.
         let mut r = raw;
@@ -595,10 +596,10 @@ fn rand_modulator_is_self_seeded_and_bounded() {
     };
     // Deterministic from its own fields only — no shared-stream coupling,
     // so a sibling edit elsewhere in the graph can never shift it.
-    let a = eval_value(&v(1), 4410, 44_100);
-    assert_eq!(a, eval_value(&v(1), 4410, 44_100));
+    let a = eval_value(&v(1), 4410, 44_100, 0);
+    assert_eq!(a, eval_value(&v(1), 4410, 44_100, 0));
     // A different seed decorrelates the walk.
-    assert_ne!(a, eval_value(&v(2), 4410, 44_100));
+    assert_ne!(a, eval_value(&v(2), 4410, 44_100, 0));
     // The walk stays inside [from, to].
     assert!(a.iter().all(|&x| (200.0..=800.0).contains(&x)));
 }
@@ -642,14 +643,17 @@ fn loop_body_is_region_minus_crossfade() {
     let sr = 1000u32;
     let samples = vec![0.5f32; 1000]; // 1 s
     // Region [0.2, 0.8) = 600 samples, crossfade 0.1 s = 100 ⇒ body 500.
-    let out = make_loop_buffer(&samples, sr, 0.2, Some(0.8), 0.1);
+    let out = make_loop_buffer(&samples, sr, 0.2, Some(0.8), 0.1, 0);
     assert_eq!(out.len(), 500);
     // Degenerate inputs fall back gracefully.
     assert_eq!(
-        make_loop_buffer(&samples, sr, 0.9, Some(0.1), 0.1).len(),
+        make_loop_buffer(&samples, sr, 0.9, Some(0.1), 0.1, 0).len(),
         1000
     );
-    assert_eq!(make_loop_buffer(&samples, sr, 0.0, None, 0.0).len(), 1000);
+    assert_eq!(
+        make_loop_buffer(&samples, sr, 0.0, None, 0.0, 0).len(),
+        1000
+    );
 }
 
 #[test]

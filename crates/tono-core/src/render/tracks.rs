@@ -30,10 +30,14 @@ enum TrackRender {
 /// Equal-power channel gains for a `pan`/`gain` pair — one formula for the
 /// constant fast path and the per-sample automated path, so they can never
 /// drift (identical f32 op order, byte-identical output). Shared with the
-/// streaming mixer ([`crate::streaming`]) for the same reason.
-pub(crate) fn pan_gains(pan: f32, gain: f32) -> (f32, f32) {
+/// streaming mixer ([`crate::streaming`]) for the same reason. `engine`
+/// dispatches the pan-law sin/cos (ADR 0001).
+pub(crate) fn pan_gains(pan: f32, gain: f32, engine: u32) -> (f32, f32) {
     let theta = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
-    (theta.cos() * gain, theta.sin() * gain)
+    (
+        crate::dsp::cos(theta, engine) * gain,
+        crate::dsp::sin(theta, engine) * gain,
+    )
 }
 
 /// Derive a track's independent RNG stream from the document seed (schema
@@ -145,8 +149,9 @@ impl LaneCursor {
     /// holding flat past either end. Strict `>` in the advance keeps the
     /// exact segment the from-zero scan would pick — a sample landing on a
     /// breakpoint interpolates in the earlier segment, so the floats (and
-    /// the rendered bytes) are unchanged.
-    pub(crate) fn at(&mut self, i: usize, sr: u32) -> f32 {
+    /// the rendered bytes) are unchanged. `engine` dispatches the exp curve's
+    /// powf (ADR 0001).
+    pub(crate) fn at(&mut self, i: usize, sr: u32, engine: u32) -> f32 {
         let t = i as f32 / sr as f32;
         // An unvalidated doc with sample_rate 0 makes frame 0 NaN (0.0/0.0),
         // which every comparison below rejects — hold the first point
@@ -182,7 +187,7 @@ impl LaneCursor {
             // segment degrades to linear (deterministic).
             AutoCurve::Exp => {
                 if w0.v > 0.0 && w1.v > 0.0 {
-                    w0.v * (w1.v / w0.v).powf(u)
+                    w0.v * crate::dsp::powf(w1.v / w0.v, u, engine)
                 } else {
                     w0.v + (w1.v - w0.v) * u
                 }
@@ -199,9 +204,10 @@ fn lane_for(
     n: usize,
     sr: u32,
     default: f32,
+    engine: u32,
 ) -> Option<Vec<f32>> {
     let mut cursor = LaneCursor::build(automation, target, default)?;
-    Some((0..n).map(|i| cursor.at(i, sr)).collect())
+    Some((0..n).map(|i| cursor.at(i, sr, engine)).collect())
 }
 
 /// The gain-reduction envelope for one follower track: the `duck` node's
@@ -217,6 +223,7 @@ fn duck_envelope(
     sc: &Sidechain,
     n: usize,
     sr: u32,
+    engine: u32,
 ) -> Vec<f32> {
     let mut sig = vec![0.0f32; n];
     let gain_lane = lane_for(
@@ -225,6 +232,7 @@ fn duck_envelope(
         n,
         sr,
         source_track.gain,
+        engine,
     );
     let g = |pos: usize| gain_lane.as_ref().map_or(source_track.gain, |a| a[pos]);
     match source {
@@ -243,8 +251,8 @@ fn duck_envelope(
         }
     }
     let srf = sr as f32;
-    let at = (-1.0 / (sc.attack.max(1e-4) * srf)).exp();
-    let rt = (-1.0 / (sc.release.max(1e-4) * srf)).exp();
+    let at = crate::dsp::exp(-1.0 / (sc.attack.max(1e-4) * srf), engine);
+    let rt = crate::dsp::exp(-1.0 / (sc.release.max(1e-4) * srf), engine);
     let mut env = 0.0f32;
     sig.into_iter()
         .map(|t| {
@@ -415,16 +423,16 @@ fn render_tracks_impl(
         // fast path, byte-identical); with automation it varies per bus sample.
         // The closure returns the same constant value when unautomated, so the
         // arithmetic on existing documents is unchanged.
-        let (glc, grc) = pan_gains(t.pan.clamp(-1.0, 1.0), t.gain);
-        let gain_lane = lane_for(&t.automation, AutoTarget::Gain, n, sr, t.gain);
-        let pan_lane = lane_for(&t.automation, AutoTarget::Pan, n, sr, t.pan);
+        let (glc, grc) = pan_gains(t.pan.clamp(-1.0, 1.0), t.gain, engine);
+        let gain_lane = lane_for(&t.automation, AutoTarget::Gain, n, sr, t.gain, engine);
+        let pan_lane = lane_for(&t.automation, AutoTarget::Pan, n, sr, t.pan, engine);
         let gl_gr = |pos: usize| -> (f32, f32) {
             match (&gain_lane, &pan_lane) {
                 (None, None) => (glc, grc),
                 (g, p) => {
                     let gain = g.as_ref().map_or(t.gain, |a| a[pos]);
                     let pan = p.as_ref().map_or(t.pan, |a| a[pos]).clamp(-1.0, 1.0);
-                    pan_gains(pan, gain)
+                    pan_gains(pan, gain, engine)
                 }
             }
         };
@@ -437,7 +445,7 @@ fn render_tracks_impl(
                 .iter()
                 .enumerate()
                 .find(|(_, s)| s.id.as_deref() == Some(sc.source.as_str()))?;
-            Some(duck_envelope(&rendered[si], source, sc, n, sr))
+            Some(duck_envelope(&rendered[si], source, sc, n, sr, engine))
         });
         // Contribution stats accumulate over what actually lands (post
         // fader/pan/offset/duck, pre bus/master). Per-channel energy keeps
@@ -524,8 +532,8 @@ fn render_tracks_impl(
         let rms = ((tsum / (2 * n) as f64) as f32).sqrt();
         layers.push(LayerStats {
             id: layer_id,
-            peak_dbfs: crate::dsp::dbfs(tpeak),
-            rms_dbfs: crate::dsp::dbfs(rms),
+            peak_dbfs: crate::dsp::dbfs_e(tpeak, engine),
+            rms_dbfs: crate::dsp::dbfs_e(rms, engine),
             energy_pct: 0.0, // filled below once the total is known
             mute: false,
         });
@@ -594,8 +602,8 @@ fn render_tracks_impl(
         crossfade_secs,
     } = doc.playback
     {
-        left = make_loop_buffer(&left, sr, start_secs, end_secs, crossfade_secs);
-        right = make_loop_buffer(&right, sr, start_secs, end_secs, crossfade_secs);
+        left = make_loop_buffer(&left, sr, start_secs, end_secs, crossfade_secs, engine);
+        right = make_loop_buffer(&right, sr, start_secs, end_secs, crossfade_secs, engine);
     }
     if let Some(nz) = &doc.normalize {
         if engine >= 4 {
@@ -603,7 +611,7 @@ fn render_tracks_impl(
             // is sacred. Engine ≤ 3 docs keep the original per-channel stage
             // bit-for-bit (it gain-matched L and R independently, collapsing
             // any asymmetric mix toward center).
-            normalize_output_v4(&mut [&mut left, &mut right], nz, sr);
+            normalize_output_v4(&mut [&mut left, &mut right], nz, sr, engine);
         } else {
             normalize_output(&mut left, nz);
             normalize_output(&mut right, nz);

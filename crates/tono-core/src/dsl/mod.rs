@@ -46,7 +46,16 @@ pub const SCHEMA_VERSION: u32 = 2;
 /// authored balance), uses sample-rate-correct gated BS.1770 loudness, and
 /// limits against a real oversampled true-peak estimate — and seeds humanize
 /// jitter per note, so chords stop sharing one timing/velocity offset.
-pub const ENGINE_VERSION: u32 = 4;
+/// Revision 5 makes the render byte-identical ACROSS PLATFORMS (ADR 0001):
+/// every transcendental in the byte-pinned render path — oscillators,
+/// envelopes, filters, dynamics, pitch conversion, the loudness/normalize
+/// measurement — evaluates through the deterministic [`crate::det`] kernels
+/// instead of platform libm (whose last bits differ between macOS-arm64 and
+/// linux-x86_64), and `convolve` runs a fixed-order radix-2 FFT (twiddles
+/// from `det::sin`/`det::cos`, f64 throughout, both signals zero-padded to
+/// the next power of two ≥ input + IR − 1) instead of rustfft. Engine ≤ 4
+/// documents keep their historical per-platform renders bit-for-bit.
+pub const ENGINE_VERSION: u32 = 5;
 
 // Serde `default = "..."` requires free functions. Values with non-obvious
 // origins: haas 12 ms sits in the precedence-effect sweet spot, ceiling
@@ -264,7 +273,19 @@ impl From<Modulator> for Value {
 /// Parse a musical pitch into Hz: a note name (`"A4"`, `"C#3"`, `"Gb5"`,
 /// `"F#-1"`; octave defaults to 4) or a MIDI number (`"midi:69"` / `"m69"`).
 /// A4 = 440 Hz, 12-tone equal temperament. Returns `None` if unparseable.
+///
+/// This is the engine-0 (platform-libm) conversion — the historical public
+/// behavior, kept for API compatibility. The render paths call
+/// [`note_to_hz_e`] with the document's engine so engine ≥ 5 documents
+/// convert through the deterministic kernels (ADR 0001).
 pub fn note_to_hz(s: &str) -> Option<f32> {
+    note_to_hz_e(s, 0)
+}
+
+/// [`note_to_hz`] at a given engine revision: engine ≥ 5 evaluates the final
+/// `2^((m−69)/12)` through [`crate::det::powff`] (cross-platform identical),
+/// below that through platform libm (bit-exact with every historical render).
+pub(crate) fn note_to_hz_e(s: &str, engine: u32) -> Option<f32> {
     let s = s.trim();
     if s.is_empty() {
         return None;
@@ -275,7 +296,7 @@ pub fn note_to_hz(s: &str) -> Option<f32> {
         .or_else(|| s.strip_prefix(['m', 'M']))
         && let Ok(n) = num.trim().parse::<f32>()
     {
-        return midi_to_hz(n);
+        return midi_to_hz_e(n, engine);
     }
     // Note name: letter, optional #/b accidentals, optional octave (default 4).
     let mut chars = s.chars().peekable();
@@ -304,11 +325,11 @@ pub fn note_to_hz(s: &str) -> Option<f32> {
         rest.parse().ok()?
     };
     // i64 headroom: huge octaves ("A200000000") would overflow i32 arithmetic.
-    midi_to_hz(((octave as i64 + 1) * 12 + semis as i64) as f32)
+    midi_to_hz_e(((octave as i64 + 1) * 12 + semis as i64) as f32, engine)
 }
 
-fn midi_to_hz(m: f32) -> Option<f32> {
-    let hz = 440.0 * 2f32.powf((m - 69.0) / 12.0);
+fn midi_to_hz_e(m: f32, engine: u32) -> Option<f32> {
+    let hz = 440.0 * crate::dsp::powf(2.0, (m - 69.0) / 12.0, engine);
     // Reject pitches that would poison the render: non-finite or non-positive
     // Hz turns oscillator phase accumulators to NaN, and anything far above
     // the highest supported Nyquist (96 kHz at 192 kHz sr) is an authoring

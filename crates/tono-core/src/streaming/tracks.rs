@@ -93,6 +93,8 @@ struct StereoChain {
     /// Absolute position on the bus timeline (the closed-form processors —
     /// tremolo, chorus, … — key on it).
     pos: usize,
+    /// The document's kernel revision, forwarded into every `Proc::step`.
+    engine: u32,
 }
 
 impl StereoChain {
@@ -117,17 +119,18 @@ impl StereoChain {
                 }
             })
             .collect::<Option<_>>()?;
-        Some(StereoChain { fx, pos: 0 })
+        Some(StereoChain { fx, pos: 0, engine })
     }
 
     /// Process one stereo sample.
     fn step(&mut self, l: f32, r: f32) -> (f32, f32) {
         let pos = self.pos;
         self.pos += 1;
+        let engine = self.engine;
         let (mut l, mut r) = (l, r);
         for (pl, pr) in self.fx.iter_mut() {
-            l = pl.step(l, pos, 1.0);
-            r = pr.step(r, pos, 1.0);
+            l = pl.step(l, pos, 1.0, engine);
+            r = pr.step(r, pos, 1.0, engine);
         }
         (l, r)
     }
@@ -158,6 +161,8 @@ pub(crate) struct StreamTracks {
     /// Per-bus current input sample (this position's routed + sent sum).
     bus_in: Vec<(f32, f32)>,
     sr: u32,
+    /// The document's kernel revision (ADR 0001), forwarded into the graphs.
+    engine: u32,
     /// The bus position (absolute sample index on the song timeline).
     pos: usize,
 }
@@ -217,15 +222,15 @@ impl StreamTracks {
                     source_gain: source.gain,
                     gain_lane: LaneCursor::build(&source.automation, AutoTarget::Gain, source.gain),
                     env: 0.0,
-                    at: (-1.0 / (sc.attack.max(1e-4) * srf)).exp(),
-                    rt: (-1.0 / (sc.release.max(1e-4) * srf)).exp(),
+                    at: crate::dsp::exp(-1.0 / (sc.attack.max(1e-4) * srf), engine),
+                    rt: crate::dsp::exp(-1.0 / (sc.release.max(1e-4) * srf), engine),
                     amount: sc.amount,
                 });
             }
             out_tracks.push(TrackStream {
                 src,
                 off,
-                constant: pan_gains(t.pan.clamp(-1.0, 1.0), t.gain),
+                constant: pan_gains(t.pan.clamp(-1.0, 1.0), t.gain, engine),
                 gain: t.gain,
                 pan: t.pan,
                 gain_lane: LaneCursor::build(&t.automation, AutoTarget::Gain, t.gain),
@@ -266,6 +271,7 @@ impl StreamTracks {
             ducks: vec![1.0; n_tracks],
             bus_in: vec![(0.0, 0.0); n_buses],
             sr,
+            engine,
             pos: 0,
         })
     }
@@ -279,13 +285,14 @@ impl StreamTracks {
         let p = self.pos;
         self.pos += 1;
         let sr = self.sr;
+        let engine = self.engine;
         // 1. Track graphs. A track sounds at local sample p - off; before its
         //    `at` lands it contributes nothing and its graph is not stepped
         //    (the first stepped sample is its local 0, exactly the offline's
         //    render-then-shift).
         for (i, t) in self.tracks.iter_mut().enumerate() {
             self.xs[i] = match &mut t.src {
-                Some(src) if p >= t.off => src.step(p - t.off, pitch),
+                Some(src) if p >= t.off => src.step(p - t.off, pitch, engine),
                 _ => 0.0,
             };
         }
@@ -302,7 +309,7 @@ impl StreamTracks {
                 let g = link
                     .gain_lane
                     .as_mut()
-                    .map_or(link.source_gain, |c| c.at(p, sr));
+                    .map_or(link.source_gain, |c| c.at(p, sr, engine));
                 self.xs[link.source] * g
             } else {
                 0.0
@@ -327,9 +334,12 @@ impl StreamTracks {
             let (gl, gr) = match (&mut t.gain_lane, &mut t.pan_lane) {
                 (None, None) => t.constant,
                 (g, pn) => {
-                    let gain = g.as_mut().map_or(t.gain, |c| c.at(p, sr));
-                    let pan = pn.as_mut().map_or(t.pan, |c| c.at(p, sr)).clamp(-1.0, 1.0);
-                    pan_gains(pan, gain)
+                    let gain = g.as_mut().map_or(t.gain, |c| c.at(p, sr, engine));
+                    let pan = pn
+                        .as_mut()
+                        .map_or(t.pan, |c| c.at(p, sr, engine))
+                        .clamp(-1.0, 1.0);
+                    pan_gains(pan, gain, engine)
                 }
             };
             let d = self.ducks[i];

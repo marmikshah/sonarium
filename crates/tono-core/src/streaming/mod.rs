@@ -211,6 +211,9 @@ fn node_blockers(node: &Node, engine: u32, push: &mut impl FnMut(StreamBlocker))
 pub struct StreamGraph {
     root: Root,
     pos: usize,
+    /// The document's kernel revision, forwarded into every per-sample step
+    /// (ADR 0001 — engine ≥ 5 evaluates through the deterministic kernels).
+    engine: u32,
     /// Live note-pitch scale (1.0 = as authored). Smoothed per-sample toward
     /// `pitch_target` so a note change / portamento never zippers or clicks.
     pitch: f32,
@@ -322,20 +325,16 @@ impl StreamGraph {
         // The duration clamp mirrors the offline render paths so an
         // unvalidated doc can't request an unbounded seq pre-render here.
         let n = ((doc.duration.clamp(0.0, 600.0) * doc.sample_rate as f32).ceil() as usize).max(1);
+        let engine = doc.effective_engine();
         let root = if matches!(doc.root, Node::Tracks { .. }) {
             Root::Tracks(tracks::StreamTracks::build(doc)?)
         } else {
-            Root::Mono(try_src(
-                &doc.root,
-                doc.sample_rate,
-                n,
-                doc.effective_engine(),
-                doc.seed,
-            )?)
+            Root::Mono(try_src(&doc.root, doc.sample_rate, n, engine, doc.seed)?)
         };
         Some(StreamGraph {
             root,
             pos: 0,
+            engine,
             pitch: 1.0,
             pitch_target: 1.0,
             glide: 1.0,
@@ -349,11 +348,12 @@ impl StreamGraph {
     /// A `tracks` document fills its mid (`0.5 × (L + R)`, what
     /// [`crate::render::render_product`] hands mono consumers).
     pub fn fill(&mut self, out: &mut [f32]) {
+        let engine = self.engine;
         for s in out.iter_mut() {
             self.pitch += (self.pitch_target - self.pitch) * self.glide;
             let pitch = self.pitch * self.bend;
             *s = match &mut self.root {
-                Root::Mono(src) => src.step(self.pos, pitch),
+                Root::Mono(src) => src.step(self.pos, pitch, engine),
                 Root::Tracks(mix) => {
                     let (l, r) = mix.step(pitch);
                     0.5 * (l + r)
@@ -370,12 +370,13 @@ impl StreamGraph {
     /// mixer's bus. The slice lengths must match.
     pub fn fill_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
         assert_eq!(left.len(), right.len(), "stereo blocks must match");
+        let engine = self.engine;
         for (l, r) in left.iter_mut().zip(right.iter_mut()) {
             self.pitch += (self.pitch_target - self.pitch) * self.glide;
             let pitch = self.pitch * self.bend;
             match &mut self.root {
                 Root::Mono(src) => {
-                    let v = src.step(self.pos, pitch);
+                    let v = src.step(self.pos, pitch, engine);
                     *l = v;
                     *r = v;
                 }
@@ -452,6 +453,9 @@ impl StreamGraph {
 pub struct EffectChain {
     procs: Vec<Proc>,
     pos: usize,
+    /// The kernel revision `try_new` baked the processors at — forwarded into
+    /// every step so the chain matches the offline render (ADR 0001).
+    engine: u32,
 }
 
 impl EffectChain {
@@ -465,16 +469,21 @@ impl EffectChain {
             .enumerate()
             .map(|(i, node)| try_proc(node, sr, n, engine, node_path(0, i)))
             .collect::<Option<_>>()?;
-        Some(EffectChain { procs, pos: 0 })
+        Some(EffectChain {
+            procs,
+            pos: 0,
+            engine,
+        })
     }
 
     /// Process a mono block in place. The master bus isn't pitched, so processors
     /// run at the authored pitch (`1.0`).
     pub fn process(&mut self, block: &mut [f32]) {
+        let engine = self.engine;
         for x in block.iter_mut() {
             let mut v = *x;
             for p in self.procs.iter_mut() {
-                v = p.step(v, self.pos, 1.0);
+                v = p.step(v, self.pos, 1.0, engine);
             }
             *x = v;
             self.pos += 1;
