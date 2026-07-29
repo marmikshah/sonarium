@@ -31,8 +31,10 @@ USAGE:
         Print the JSON Schema of the document format (for editor
         autocomplete, validation, and agent self-correction).
 
-    tono midi FILE.json [-o FILE.mid]
+    tono midi FILE.json [-o FILE.mid] [--song]
         Export a SoundDoc's sequences to a Standard MIDI File.
+        --song reads a Song instead (each song track becomes a
+        MIDI track, the kit on channel 10).
 
     tono compile SONG.json [-o FILE] [--sample-rate N] [--inspect]
         Compile a Song into a validated, hashed Program bundle
@@ -43,10 +45,11 @@ USAGE:
         machine-readable summary (hash, version pins, track roster,
         resource estimates, warnings) as JSON and writes nothing.
 
-    tono import FILE.mid [-o DOC.json] [--steps-per-beat 4]
+    tono import FILE.mid [-o DOC.json] [--steps-per-beat 4] [--song]
         Import a Standard MIDI File as a renderable SoundDoc of seq
         tracks (GM programs map to the built-in voices; channel 10
-        becomes the drum kit).
+        becomes the drum kit). --song imports to a Song instead:
+        notes land directly on the tracks, no patterns.
 
     tono diff A.json B.json
         Render both documents and report what changed: loudness, peak,
@@ -400,8 +403,8 @@ fn schema_cmd(args: &[String]) -> anyhow::Result<()> {
 }
 
 fn midi_cmd(args: &[String]) -> anyhow::Result<()> {
-    let cli = Cli::parse(args, &["-o", "--out"], &[])?;
-    let file = cli.input("tono midi FILE.json [-o FILE.mid]")?;
+    let cli = Cli::parse(args, &["-o", "--out"], &["--song"])?;
+    let file = cli.input("tono midi FILE.json [-o FILE.mid] [--song]")?;
     let out = match cli.flag(&["-o", "--out"]) {
         Some(o) => PathBuf::from(o),
         // A defaulted output must never silently clobber an existing file.
@@ -410,8 +413,16 @@ fn midi_cmd(args: &[String]) -> anyhow::Result<()> {
         }
         None => PathBuf::from("out.mid"),
     };
-    let doc = load_doc(file)?;
-    let summary = tono::midi::export_midi(&doc, &out)?;
+    // --song switches the input format: a Song lowers through to_doc and its
+    // tracks become the MIDI tracks; without it the input is a SoundDoc.
+    let summary = if cli.has("--song") {
+        let song: tono_core::song::Song = serde_json::from_str(&fs::read_to_string(file)?)
+            .map_err(|e| anyhow::anyhow!("parsing {file} as a Song: {e}"))?;
+        tono::midi::export_song_midi(&song, &out)?
+    } else {
+        let doc = load_doc(file)?;
+        tono::midi::export_midi(&doc, &out)?
+    };
     println!(
         "{} — {} notes across {} tracks",
         out.display(),
@@ -479,8 +490,8 @@ fn compile_cmd(args: &[String]) -> anyhow::Result<()> {
 
 /// `tono import` — a Standard MIDI File becomes a renderable SoundDoc.
 fn import_cmd(args: &[String]) -> anyhow::Result<()> {
-    let usage = "tono import FILE.mid [-o DOC.json] [--steps-per-beat 4]";
-    let cli = Cli::parse(args, &["-o", "--out", "--steps-per-beat"], &[])?;
+    let usage = "tono import FILE.mid [-o DOC.json] [--steps-per-beat 4] [--song]";
+    let cli = Cli::parse(args, &["-o", "--out", "--steps-per-beat"], &["--song"])?;
     let file = cli.input(usage)?;
     let spb: u32 = match cli.flag(&["--steps-per-beat"]) {
         Some(v) => v.parse().map_err(|_| {
@@ -506,15 +517,30 @@ fn import_cmd(args: &[String]) -> anyhow::Result<()> {
             default
         }
     };
-    let (doc, summary) = tono::midi::import_midi(Path::new(file), spb)?;
-    fs::write(&out, serde_json::to_string_pretty(&doc)?)?;
-    println!(
-        "{} — {} notes across {} tracks at {:.1} bpm",
-        out.display(),
-        summary.notes,
-        summary.tracks,
-        summary.bpm
-    );
+    // --song switches the output format: the tracks become SongTracks with the
+    // notes written directly; without it the output is a SoundDoc.
+    if cli.has("--song") {
+        let song = tono::midi::import_midi_song(Path::new(file), spb)?;
+        let notes: usize = song.tracks.iter().map(|t| t.notes.len()).sum();
+        fs::write(&out, serde_json::to_string_pretty(&song)?)?;
+        println!(
+            "{} — {} notes across {} tracks at {:.1} bpm",
+            out.display(),
+            notes,
+            song.tracks.len(),
+            song.bpm
+        );
+    } else {
+        let (doc, summary) = tono::midi::import_midi(Path::new(file), spb)?;
+        fs::write(&out, serde_json::to_string_pretty(&doc)?)?;
+        println!(
+            "{} — {} notes across {} tracks at {:.1} bpm",
+            out.display(),
+            summary.notes,
+            summary.tracks,
+            summary.bpm
+        );
+    }
     Ok(())
 }
 
@@ -848,5 +874,60 @@ mod tests {
         let got =
             wait_for_change(f.to_str().unwrap(), Some(std::time::SystemTime::UNIX_EPOCH)).unwrap();
         assert_eq!(got, file_mtime(f.to_str().unwrap()).unwrap());
+    }
+
+    #[test]
+    fn midi_song_flag_reads_a_song_that_is_not_a_sounddoc() {
+        // A Song JSON has no `root` — the doc path must keep rejecting it
+        // while --song accepts it.
+        let mut song = tono_core::song::Song::new("flagtest", 120.0);
+        song.add_track(
+            "keys",
+            tono_core::dsl::SeqWave::Square,
+            tono_core::dsl::Adsr::default(),
+        );
+        song.tracks[0].notes.push(tono_core::song::note(0, 2, "C4"));
+        let dir = std::env::temp_dir().join("tono-cli-song-test");
+        fs::create_dir_all(&dir).unwrap();
+        let song_path = dir.join("flagtest.json");
+        fs::write(&song_path, serde_json::to_string_pretty(&song).unwrap()).unwrap();
+        let out = dir.join("flagtest.mid");
+        let (song_path, out) = (song_path.to_str().unwrap(), out.to_str().unwrap());
+
+        // The doc path is unchanged: a Song JSON is not a SoundDoc.
+        assert!(midi_cmd(&args(&[song_path, "-o", out])).is_err());
+
+        // --song switches the input format.
+        midi_cmd(&args(&[song_path, "--song", "-o", out])).unwrap();
+        let bytes = fs::read(out).unwrap();
+        let smf = midly::Smf::parse(&bytes).unwrap();
+        assert_eq!(smf.tracks.len(), 1);
+    }
+
+    #[test]
+    fn import_song_flag_writes_a_song_json() {
+        // A MIDI file made through the export path imports as a Song whose
+        // notes sit directly on the tracks.
+        let doc: SoundDoc = serde_json::from_str(
+            r#"{ "name":"m", "duration":2.0, "root":{ "type":"seq", "bpm":120,
+              "steps_per_beat":4, "wave":"square", "env":{"a":0.005,"d":0.1,"s":0.3,"r":0.05},
+              "notes":[ {"step":0,"len":2,"pitch":"C4"}, {"step":2,"len":2,"pitch":"E4"} ] } }"#,
+        )
+        .unwrap();
+        let dir = std::env::temp_dir().join("tono-cli-song-test");
+        fs::create_dir_all(&dir).unwrap();
+        let mid = dir.join("imp.mid");
+        tono::midi::export_midi(&doc, &mid).unwrap();
+        let out = dir.join("imp.song.json");
+        let (mid, out) = (mid.to_str().unwrap(), out.to_str().unwrap());
+
+        import_cmd(&args(&[mid, "--song", "--steps-per-beat", "4", "-o", out])).unwrap();
+        let song: tono_core::song::Song =
+            serde_json::from_str(&fs::read_to_string(out).unwrap()).unwrap();
+        assert_eq!(song.name, "imp", "the song takes the file's stem");
+        assert_eq!(song.tracks.len(), 1);
+        assert_eq!(song.tracks[0].name, "track_0");
+        assert_eq!(song.tracks[0].notes.len(), 2);
+        song.to_doc().expect("the imported song compiles");
     }
 }
