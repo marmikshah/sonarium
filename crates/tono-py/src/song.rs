@@ -7,6 +7,7 @@
 //! This API is **experimental** through the 1.10.0 alphas (docs/api-tiers.md).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods};
 use pyo3::exceptions::{PyOSError, PyTypeError, PyValueError};
@@ -1325,7 +1326,9 @@ impl Song {
             target,
         };
         match py.detach(|| self.inner.compile(&opts)) {
-            Ok(program) => Ok(Program { inner: program }),
+            Ok(program) => Ok(Program {
+                inner: Arc::new(program),
+            }),
             Err(err) => Err(compile_error(py, err)),
         }
     }
@@ -1359,8 +1362,17 @@ impl Song {
 /// A compiled song: validated, resolved, hashed — the immutable artifact
 /// applications render and ship.
 #[pyclass(module = "tono")]
-struct Program {
-    inner: CoreProgram,
+pub(crate) struct Program {
+    /// Shared: a `Performance` Arc-clones the program as its running (and
+    /// swap-target) artifact.
+    inner: Arc<CoreProgram>,
+}
+
+impl Program {
+    /// The shared inner program, for `Performance::new` / `swap_to`.
+    pub(crate) fn shared(&self) -> Arc<CoreProgram> {
+        self.inner.clone()
+    }
 }
 
 #[pymethods]
@@ -1493,7 +1505,9 @@ impl Program {
     #[staticmethod]
     fn from_json(json: &str) -> PyResult<Self> {
         CoreProgram::from_json(json)
-            .map(|inner| Program { inner })
+            .map(|inner| Program {
+                inner: Arc::new(inner),
+            })
             .map_err(|e| TonoError::new_err(e.to_string()))
     }
 

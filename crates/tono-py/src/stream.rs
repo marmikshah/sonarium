@@ -33,9 +33,9 @@ use tono_core::runtime::{
 };
 
 /// Ring depth (frames). ~85 ms at 48 kHz — ample underrun headroom.
-const RING_FRAMES: usize = 4096;
+pub(crate) const RING_FRAMES: usize = 4096;
 /// How often the pump thread refills the ring.
-const PUMP_TICK: Duration = Duration::from_millis(5);
+pub(crate) const PUMP_TICK: Duration = Duration::from_millis(5);
 
 /// The shared control surface: the whole mix behind one lock, produced into the
 /// ring. Held by the pump thread and every Python control handle.
@@ -68,7 +68,7 @@ fn to_note(note: &Bound<'_, PyAny>) -> PyResult<Note> {
 /// Parse a `SoundDoc` from JSON and stamp it with the engine's sample rate, so a
 /// looped stem or stinger plays at the right pitch regardless of the rate baked
 /// into its JSON.
-fn parse_doc(json: &str, sample_rate: u32) -> PyResult<SoundDoc> {
+pub(crate) fn parse_doc(json: &str, sample_rate: u32) -> PyResult<SoundDoc> {
     let mut doc: SoundDoc =
         serde_json::from_str(json).map_err(|e| PyValueError::new_err(e.to_string()))?;
     doc.sample_rate = sample_rate;
@@ -99,7 +99,7 @@ fn device_sample_rate() -> PyResult<u32> {
 /// `ready`, then keeps the (`!Send`) `Speaker` alive until `stop` is set.
 /// The `Renderer` is lock-free, so the `Speaker`'s uncontended source mutex
 /// costs nothing on the callback.
-fn run_stream(
+pub(crate) fn run_stream(
     sample_rate: u32,
     renderer: Renderer,
     stop: Arc<AtomicBool>,

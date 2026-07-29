@@ -32,6 +32,18 @@ __all__ = [
     "Pitch",
     "Key",
     "Chord",
+    "Performance",
+    "At",
+    "PerformanceError",
+    "QueueFullError",
+    "UnknownPositionError",
+    "next_bar",
+    "next_beat",
+    "at_frame",
+    "at_beat",
+    "at_bar",
+    "at_section",
+    "at_marker",
     "instruments",
 ]
 
@@ -349,3 +361,130 @@ class Program:
     def save(self, path: str) -> None: ...
     @staticmethod
     def load(path: str) -> Program: ...
+
+# --- performance runtime (experimental through the 1.10.0 alphas) ---
+
+class PerformanceError(TonoError):
+    """A scheduling/runtime failure of a `Performance`. Base class of the
+    specific failures; a rejected swap target raises this directly."""
+    ...
+
+class QueueFullError(PerformanceError):
+    """The scheduled-command queue is full — the command was rejected (and
+    counted in `metrics()["commands_dropped"]`)."""
+    ...
+
+class UnknownPositionError(PerformanceError):
+    """An `at` or `transition` named a marker or section the program doesn't
+    have."""
+    ...
+
+class At:
+    """Where a `Performance` command lands on the timeline. Never constructed
+    directly — build with the module helpers and pass as `at=`."""
+    ...
+
+def next_bar() -> At:
+    """At the next bar line after the current position."""
+    ...
+def next_beat() -> At:
+    """At the next whole beat after the current position."""
+    ...
+def at_frame(n: int) -> At:
+    """At an absolute frame."""
+    ...
+def at_beat(x: float) -> At:
+    """At an absolute beat (through the tempo map)."""
+    ...
+def at_bar(n: int) -> At:
+    """At an absolute bar (through the meter map and pickup)."""
+    ...
+def at_section(name: str) -> At:
+    """At a named section's first bar (unknown name → UnknownPositionError at
+    schedule time)."""
+    ...
+def at_marker(name: str) -> At:
+    """At a named marker's position (unknown name → UnknownPositionError at
+    schedule time)."""
+    ...
+
+class Performance:
+    """A running `Program`: play, seek, loop, ride gain, fire stingers, and
+    swap programs — each scheduled at a frame, beat, bar, marker, or section,
+    and executed at the exact frame on the render side.
+
+    Live mode (default) opens an output stream at the program's sample rate;
+    `headless=True` opens nothing and is driven manually with `fill` —
+    everything else works identically, so tests and CI need no audio device.
+    All control methods return the scheduled command's sequence id."""
+    def __init__(self, program: Program, sample_rate: Optional[int] = None, headless: bool = False) -> None:
+        """`sample_rate` may only restate the program's compiled rate (any
+        other value → ValueError — recompile the program instead)."""
+        ...
+    @property
+    def sample_rate(self) -> int: ...
+    @property
+    def state(self) -> str:
+        """"playing" | "paused" | "stopped", read off the render-side transport."""
+        ...
+    @property
+    def position_frames(self) -> int: ...
+    @property
+    def position_beats(self) -> float: ...
+    @property
+    def position_bars(self) -> float: ...
+    @property
+    def queue_depth(self) -> int:
+        """Commands queued but not yet executed."""
+        ...
+    def play(self, at: Optional[At] = None) -> int: ...
+    def pause(self, at: Optional[At] = None) -> int: ...
+    def stop(self, at: Optional[At] = None) -> int: ...
+    def seek_beat(self, beat: float, at: Optional[At] = None) -> int: ...
+    def seek_bar(self, bar: int, at: Optional[At] = None) -> int: ...
+    def set_loop_bars(self, start: int, end: int, at: Optional[At] = None) -> int:
+        """Loop the bar range `[start, end)`."""
+        ...
+    def clear_loop(self, at: Optional[At] = None) -> int: ...
+    def set_gain(self, gain: float, at: Optional[At] = None) -> int:
+        """Master gain (clamped to 0..2 by the core, ramped click-free)."""
+        ...
+    def transition(self, name: str, at: Optional[At] = None) -> int:
+        """Quantized section transition; unknown section → UnknownPositionError."""
+        ...
+    def stinger(self, doc_json: str, gain: float = 1.0, at: Optional[At] = None) -> int:
+        """Fire a one-shot SoundDoc (JSON) over the song. Parsed, validated,
+        and rendered at schedule time. The documented one-shot bridge until
+        typed SoundDoc authoring exists."""
+        ...
+    def swap(self, program: Program, at: Optional[At] = None) -> int:
+        """Crossfade to another program (from its frame 0, with its own
+        transport). Mismatched sample rate → ValueError; a target the core
+        rejects → PerformanceError."""
+        ...
+    def metrics(self) -> dict[str, int]:
+        """frames_rendered, commands_executed, commands_dropped,
+        queue_depth_max, swaps, stingers_fired, queue_depth (now)."""
+        ...
+    def capture_start(self) -> None: ...
+    def capture_stop(self) -> list[dict[str, Any]]:
+        """Stop recording; one dict per captured command — {at_frame, seq,
+        command} with `command` rendered readably ("Play", "SetGain(0.5)").
+        The record is for inspection; replaying is re-issuing the same calls."""
+        ...
+    def snapshot(self) -> dict[str, Any]:
+        """{position_frames, state, master_gain, loop_range (None or
+        (start, end) frames)} — `apply_snapshot` restores it exactly."""
+        ...
+    def apply_snapshot(self, snapshot: dict[str, Any]) -> None:
+        """Restore a `snapshot()` dict; missing/mistyped keys → ValueError."""
+        ...
+    def fill(self, frames: int) -> npt.NDArray[np.float32]:
+        """Headless only: render `frames` frames to an owned stereo
+        (frames, 2) float32 array (GIL released). Live mode → RuntimeError."""
+        ...
+    def close(self) -> None:
+        """Stop the stream and join the threads (idempotent; Drop does the same)."""
+        ...
+    def __enter__(self) -> Performance: ...
+    def __exit__(self, *args: Any) -> bool: ...

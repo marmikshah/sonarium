@@ -14,6 +14,7 @@ Run from the repo root after `make python`:
 
 import json
 import tempfile
+import time
 from fractions import Fraction
 from pathlib import Path
 
@@ -54,8 +55,8 @@ def test_equivalence_hash_matches_rust() -> None:
     assert [t["wave"] for t in program.tracks] == ["bass", "kit"]
     assert [t["notes"] for t in program.tracks] == [16, 16]
     assert program.estimates["events"] == 32
-    assert program.is_streamable is False  # a tracks root warns (T1504)
-    assert any(w["code"] == "T1504" for w in program.warnings)
+    assert program.is_streamable is True  # v2 tracks roots stream byte-identically (alpha.2)
+    assert program.warnings == [], program.warnings
 
 
 def test_render_shapes_and_determinism() -> None:
@@ -610,6 +611,371 @@ def test_harmony() -> None:
         assert "aug" in str(exc), str(exc)
 
 
+# --- alpha.3: the performance runtime (all headless — CI has no device) ---
+
+# Frame math at 44_100 Hz, 120 BPM, 4/4: one beat = 0.5 s = 22_050 frames,
+# one bar = 88_200 frames; beat 4 = bar 1 = 88_200, bar 2 = 176_400.
+BLIP_DOC = json.dumps(
+    {
+        "name": "blip",
+        "duration": 0.2,
+        "root": {
+            "type": "mul",
+            "inputs": [
+                {"type": "sawtooth", "freq": 880},
+                {"type": "env", "a": 0.0, "d": 0.05, "s": 0.0, "r": 0.01},
+            ],
+        },
+    }
+)
+
+
+def performance_program(sample_rate: int = 44_100) -> "tono.Program":
+    """A two-track, four-bar program with a section at bar 2 and a marker."""
+    song = tono.Song("perf-demo", tempo=120.0)
+    bass = song.track("bass", tono.instruments.bass("finger"))
+    keys = song.track("keys", tono.instruments.piano())
+    riff = tono.Pattern(bars=1)
+    riff.note("C2", at=0, duration=1)
+    riff.note("G2", at=2, duration=1)
+    stab = tono.Pattern(bars=1)
+    stab.note("C4", at=0, duration=0.5)
+    stab.note("D#4", at=1.5, duration=0.5)
+    song.arrange(bass, riff, bars=range(4))
+    song.arrange(keys, stab, bars=range(4))
+    song.add_section("second", 2, 2)
+    song.add_marker("drop", 8)
+    return song.compile(sample_rate=sample_rate)
+
+
+def other_program(sample_rate: int = 44_100) -> "tono.Program":
+    """The swap target: a single held note at a different tempo."""
+    song = tono.Song("perf-other", tempo=100.0)
+    lead = song.track("lead", tono.instruments.piano("bright"))
+    phrase = tono.Pattern(bars=1)
+    phrase.note("A4", at=0, duration=4)
+    song.arrange(lead, phrase)
+    return song.compile(sample_rate=sample_rate)
+
+
+def _fill_chunked(p: "tono.Performance", frames: int, block: int = 512) -> np.ndarray:
+    """Render `frames` frames in bounded blocks (the core's gain ramps
+    interpolate per rendered slice, so ramp assertions need bounded blocks —
+    the same shape as the core's own fill_all test helper)."""
+    return np.concatenate([p.fill(min(block, frames - n)) for n in range(0, frames, block)])
+
+
+def _scripted(p: "tono.Performance") -> None:
+    """One scripted session (play, gain at a frame, seek, loop) shared by the
+    determinism and capture/replay tests."""
+    p.play()
+    p.set_gain(0.5, at=tono.at_frame(8_000))
+    p.seek_bar(1, at=tono.at_frame(12_000))
+    p.set_gain(1.0, at=tono.at_frame(16_000))
+    p.set_loop_bars(1, 2, at=tono.at_frame(20_000))
+
+
+def test_performance_deterministic_and_chunk_invariant() -> None:
+    program = performance_program()
+
+    def take(chunks: list) -> np.ndarray:
+        with tono.Performance(program, headless=True) as p:
+            _scripted(p)
+            return np.concatenate([p.fill(n) for n in chunks])
+
+    a, b = take([40_000]), take([40_000])
+    assert np.array_equal(a, b), "the same session renders bit-identically twice"
+    # Block-boundary invariance (the core's byte-identity promise) holds for a
+    # ramp-free session; gain ramps interpolate per rendered slice by design.
+    def ramp_free(p: "tono.Performance") -> None:
+        p.play()
+        p.seek_bar(1, at=tono.at_frame(12_000))
+        p.set_loop_bars(1, 2, at=tono.at_frame(20_000))
+
+    def take_ramp_free(chunks: list) -> np.ndarray:
+        with tono.Performance(program, headless=True) as p:
+            ramp_free(p)
+            return np.concatenate([p.fill(n) for n in chunks])
+
+    x, y = take_ramp_free([40_000]), take_ramp_free([512, 333, 40_000 - 845])
+    assert np.array_equal(x, y), "the render must not depend on block boundaries"
+    assert a.dtype == np.float32 and a.shape == (40_000, 2)
+    assert a.flags["C_CONTIGUOUS"]
+
+
+def test_performance_gain_lands_on_the_frame() -> None:
+    program = performance_program()
+    at = 10_000
+    with tono.Performance(program, headless=True) as plain:
+        plain.play()
+        ref = _fill_chunked(plain, 30_000)
+    assert np.abs(ref[1_000:at]).max() > 0, "the pre region actually sounds"
+
+    with tono.Performance(program, headless=True) as p:
+        p.play()
+        p.set_gain(0.0, at=tono.at_frame(at))
+        got = _fill_chunked(p, 30_000)
+    assert np.array_equal(got[:at], ref[:at]), "pre-command audio is untouched"
+    tail = at + 1_024  # past the core's gain ramp + per-slice wind-down
+    assert np.abs(got[tail:]).max() == 0.0, "gain 0 after the ramp"
+
+    with tono.Performance(program, headless=True) as p:
+        p.play()
+        p.set_gain(0.5, at=tono.at_frame(at))
+        got = _fill_chunked(p, 30_000)
+    assert np.array_equal(got[:at], ref[:at])
+    assert np.array_equal(got[tail:], ref[tail:] * np.float32(0.5)), "the gain lands exactly"
+
+
+def test_performance_stinger_onset_lands_on_the_beat() -> None:
+    program = performance_program()
+    at = 88_200  # beat 4 at 120 BPM, 44.1 kHz
+    with tono.Performance(program, headless=True) as plain:
+        plain.play()
+        ref = plain.fill(at + 4_000)
+    with tono.Performance(program, headless=True) as p:
+        p.play()
+        p.stinger(BLIP_DOC, at=tono.at_beat(4.0))
+        got = p.fill(at + 4_000)
+        assert p.metrics()["stingers_fired"] == 1
+    diff = np.abs(got - ref)
+    assert diff[:at].max() == 0.0, "nothing leaks before the stinger's frame"
+    assert diff[at : at + 64].max() > 1e-3, "the stinger onset is audible at the beat"
+
+
+def test_performance_swap_crossfades_and_counts() -> None:
+    def take() -> tuple:
+        with tono.Performance(performance_program(), headless=True) as p:
+            p.play()
+            p.swap(other_program(), at=tono.at_frame(20_000))
+            out = _fill_chunked(p, 60_000)
+            return out, p.metrics()["swaps"]
+
+    (a, swaps_a), (b, _) = take(), take()
+    assert np.array_equal(a, b), "the swap is deterministic"
+    assert swaps_a == 1
+    assert np.abs(a[30_000:]).max() > 0, "the swapped-in program keeps playing"
+    # Past the crossfade the output is exactly the new program from its frame 0
+    # (bounded blocks: the fade ramps per rendered slice, like the gain ramp).
+    with tono.Performance(other_program(), headless=True) as plain:
+        plain.play()
+        other = _fill_chunked(plain, 10_000)
+    assert np.array_equal(a[22_000:30_000], other[2_000:10_000]), "post-fade audio is the new program"
+
+    # A mismatched-rate swap target is rejected at the Python boundary.
+    with tono.Performance(performance_program(), headless=True) as p:
+        try:
+            p.swap(other_program(sample_rate=48_000))
+            raise AssertionError("expected ValueError")
+        except ValueError as exc:
+            assert "48_000" in str(exc).replace(",", "") or "48000" in str(exc), str(exc)
+
+
+def test_performance_transition_lands_and_unknown_section_raises() -> None:
+    program = performance_program()
+    with tono.Performance(program, headless=True) as plain:
+        plain.play()
+        ref = plain.fill(178_400)
+    with tono.Performance(program, headless=True) as p:
+        p.play()
+        p.transition("second", at=tono.at_frame(5_000))
+        got = p.fill(12_000)
+        # After the seek, the audio is the section's first bar (bar 2 = 176_400).
+        assert np.array_equal(got[5_000:7_000], ref[176_400:178_400])
+        assert issubclass(tono.UnknownPositionError, tono.PerformanceError)
+        assert issubclass(tono.PerformanceError, tono.TonoError)
+        try:
+            p.transition("nope")
+            raise AssertionError("expected UnknownPositionError")
+        except tono.UnknownPositionError as exc:
+            assert "nope" in str(exc)
+        # An unknown position in `at` fails at schedule time too.
+        for bad_at in (tono.at_section("nope"), tono.at_marker("nope")):
+            try:
+                p.play(at=bad_at)
+                raise AssertionError("expected UnknownPositionError")
+            except tono.UnknownPositionError:
+                pass
+
+
+def test_performance_full_queue_rejects_and_counts() -> None:
+    with tono.Performance(performance_program(), headless=True) as p:
+        for i in range(4_096):
+            p.set_gain(0.5, at=tono.at_frame(1_000_000 + i))
+        assert p.queue_depth == 4_096
+        assert issubclass(tono.QueueFullError, tono.PerformanceError)
+        try:
+            p.play()
+            raise AssertionError("expected QueueFullError")
+        except tono.QueueFullError:
+            pass
+        m = p.metrics()
+        assert m["commands_dropped"] == 1
+        assert m["queue_depth_max"] == 4_096
+
+
+def test_performance_capture_and_replay_reproduces() -> None:
+    program = performance_program()
+    with tono.Performance(program, headless=True) as a:
+        a.capture_start()
+        _scripted(a)
+        captured = a.capture_stop()
+        take_a = a.fill(40_000)
+    assert [c["command"] for c in captured] == [
+        "Play",
+        "SetGain(0.5)",
+        "SeekBar(1)",
+        "SetGain(1)",
+        "SetLoopBars(1, 2)",
+    ]
+    assert [c["at_frame"] for c in captured] == [0, 8_000, 12_000, 16_000, 20_000]
+    assert [c["seq"] for c in captured] == [1, 2, 3, 4, 5]
+    # Replaying is re-issuing the captured calls on a fresh performance — the
+    # render is deterministic, so the take reproduces bit-exactly.
+    with tono.Performance(program, headless=True) as b:
+        _scripted(b)
+        take_b = b.fill(40_000)
+    assert np.array_equal(take_a, take_b), "replay reproduces the take"
+
+
+def test_performance_snapshot_round_trip() -> None:
+    with tono.Performance(performance_program(), headless=True) as p:
+        p.play()
+        p.fill(10_000)
+        snap = p.snapshot()
+        assert snap["state"] == "playing"
+        assert snap["position_frames"] == 10_000
+        assert snap["master_gain"] == 1.0
+        assert snap["loop_range"] is None
+        take_a = p.fill(4_000)
+        p.apply_snapshot(snap)
+        assert p.state == "playing" and p.position_frames == 10_000
+        take_b = p.fill(4_000)
+        assert np.array_equal(take_a, take_b), "the snapshot replays the position"
+        # The loop range round-trips through the snapshot dict (frames).
+        p.set_loop_bars(1, 2)
+        p.fill(1)
+        assert p.snapshot()["loop_range"] == (88_200, 176_400)
+        p.clear_loop()
+        p.fill(1)
+        assert p.snapshot()["loop_range"] is None
+        # A mistyped or incomplete snapshot is a ValueError, not a crash.
+        for bad in ({"position_frames": "soon"}, {"state": "playing"}):
+            try:
+                p.apply_snapshot(bad)
+                raise AssertionError(f"expected ValueError for {bad}")
+            except ValueError:
+                pass
+
+
+def test_performance_context_manager_and_transport_properties() -> None:
+    with tono.Performance(performance_program(), headless=True) as p:
+        assert p.sample_rate == 44_100
+        assert p.state == "stopped" and p.position_frames == 0
+        p.play()
+        out = p.fill(1_000)
+        assert out.shape == (1_000, 2)
+        assert p.state == "playing" and p.position_frames == 1_000
+        assert abs(p.position_beats - 1_000 / 22_050) < 1e-9
+        assert abs(p.position_bars - 1_000 / 88_200) < 1e-9
+        p.pause()
+        p.fill(1)
+        assert p.state == "paused"
+        pos = p.position_frames
+        p.fill(100)
+        assert p.position_frames == pos, "paused holds position"
+        p.seek_bar(2)
+        p.fill(1)
+        assert p.position_frames == 176_400
+        p.stop()
+        p.fill(1)
+        assert p.state == "stopped" and p.position_frames == 0
+        m = p.metrics()
+        assert set(m) == {
+            "frames_rendered",
+            "commands_executed",
+            "commands_dropped",
+            "queue_depth_max",
+            "swaps",
+            "stingers_fired",
+            "queue_depth",
+        }
+        assert m["commands_executed"] == 4  # play, pause, seek_bar, stop
+        assert m["frames_rendered"] == 1_103
+    # A marker `at` resolves through the program's meta: play starts at beat 8
+    # (frame 176_400), so the render is silent until then.
+    with tono.Performance(performance_program(), headless=True) as p:
+        p.play(at=tono.at_marker("drop"))
+        assert p.queue_depth == 1
+        got = p.fill(176_400 + 100)
+        assert p.state == "playing" and p.position_frames == 100
+        assert np.abs(got[:176_400]).max() == 0.0, "silent until the marker"
+        assert np.abs(got[176_400:]).max() > 0, "playing after it"
+
+
+def test_performance_at_and_arg_errors() -> None:
+    with tono.Performance(performance_program(), headless=True) as p:
+        for bad_at in ("soon", 42, 4.0, object()):
+            try:
+                p.play(at=bad_at)
+                raise AssertionError(f"expected TypeError for {bad_at!r}")
+            except TypeError as exc:
+                assert "next_bar" in str(exc), str(exc)
+        for bad_call in (
+            lambda: tono.at_beat(float("nan")),
+            lambda: p.seek_beat(float("inf")),
+            lambda: p.set_gain(float("nan")),
+        ):
+            try:
+                bad_call()
+                raise AssertionError("expected ValueError")
+            except ValueError:
+                pass
+        # Stinger JSON is parsed and validated at the Python boundary.
+        try:
+            p.stinger("{ not json")
+            raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+
+
+def test_performance_live_constructor() -> None:
+    program = performance_program()
+    # Wrong arg types fail before any device is touched.
+    try:
+        tono.Performance("not a program")
+        raise AssertionError("expected TypeError")
+    except TypeError:
+        pass
+    # Out-of-range and program-mismatched rates are ValueErrors — the program's
+    # rate is authoritative (no device needed for these).
+    for bad in (123, program.sample_rate + 1):
+        try:
+            tono.Performance(program, sample_rate=bad)
+            raise AssertionError(f"expected ValueError for {bad}")
+        except ValueError as exc:
+            assert "Hz" in str(exc), str(exc)
+    # A live Performance needs an output device; skip gracefully without one
+    # (mirrors smoke.py's live-engine check).
+    try:
+        perf = tono.Performance(program)
+    except Exception as exc:
+        print(f"live performance skipped: {exc}")
+        return
+    perf.play()
+    time.sleep(0.1)
+    assert perf.state == "playing"
+    assert perf.position_frames > 0
+    assert perf.metrics()["frames_rendered"] > 0
+    try:
+        perf.fill(100)
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError:
+        pass
+    perf.close()
+    print("live performance OK")
+
+
 if __name__ == "__main__":
     test_equivalence_hash_matches_rust()
     test_render_shapes_and_determinism()
@@ -628,4 +994,15 @@ if __name__ == "__main__":
     test_pattern_ops()
     test_pattern_generators()
     test_harmony()
+    test_performance_deterministic_and_chunk_invariant()
+    test_performance_gain_lands_on_the_frame()
+    test_performance_stinger_onset_lands_on_the_beat()
+    test_performance_swap_crossfades_and_counts()
+    test_performance_transition_lands_and_unknown_section_raises()
+    test_performance_full_queue_rejects_and_counts()
+    test_performance_capture_and_replay_reproduces()
+    test_performance_snapshot_round_trip()
+    test_performance_context_manager_and_transport_properties()
+    test_performance_at_and_arg_errors()
+    test_performance_live_constructor()
     print("all typed-API checks passed")
