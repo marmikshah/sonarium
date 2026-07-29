@@ -73,7 +73,7 @@
   its gate to it, so the silent `Option` fallback and the report can never
   disagree (a test pins the equivalence).
 - **`tono presets [NAME]` / `tono catalog [NAME]`** — the factory sounds from
-  the shell. No NAME lists (11 presets with blurbs; 24 catalog voices by
+  the shell. No NAME lists (16 presets with blurbs; 31 catalog voices by
   family); with NAME it renders a demo — a preset plays a C-major arpeggio
   through the live `Instrument` engine bounced offline, a catalog voice plays
   a scale resolving to a chord (a two-bar groove for the drum kits) — with
