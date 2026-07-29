@@ -7,14 +7,17 @@
 //! the render executes them at exact frames in submission order — no Python,
 //! game loop, or OS timer ever needs to wake on a musical boundary. The
 //! callback path performs no allocation beyond first-use growth of the
-//! pre-sized scratch (see [`SCRATCH_FRAMES`]).
+//! pre-sized scratch (see [`SCRATCH_FRAMES`]): a stinger is rendered at
+//! schedule time, so firing one mid-callback only mixes a pre-rendered
+//! buffer — no render, no allocation on the render path.
 //!
 //! This API is **experimental** through the 1.10.0 alphas (docs/api-tiers.md).
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use super::{AudioSource, Engine, SCRATCH_FRAMES, StreamSource, Transport, TransportState, Tween};
+use super::engine::Ramp;
+use super::{AudioSource, SCRATCH_FRAMES, StreamSource, Transport, TransportState, Tween};
 use crate::dsl::SoundDoc;
 use crate::program::Program;
 
@@ -78,10 +81,10 @@ pub enum Command {
     /// Swap to a different program (crossfaded; the new program starts from
     /// its frame 0 with its own transport).
     Swap(Arc<Program>),
-    /// Fire a one-shot over the song (already loaded — the render happened
+    /// Fire a one-shot over the song (already rendered — the render happened
     /// at schedule time, never on the render path).
     Stinger {
-        /// The engine patch, loaded at schedule time.
+        /// The pre-rendered stinger's id, issued by [`Performance::stinger`].
         patch: super::PatchId,
         /// The stinger's gain.
         gain: f32,
@@ -232,9 +235,21 @@ impl SongSource {
     }
 }
 
+/// A sounding stinger: a buffer pre-rendered at schedule time with its play
+/// head and declick gain ramp. Mixed into the output without touching the
+/// allocator (capacity is reserved when the stinger is scheduled).
+struct ActiveStinger {
+    /// The interleaved stereo buffer, rendered at the program's sample rate.
+    buf: Arc<Vec<f32>>,
+    /// Play head in samples (frames × 2).
+    pos: usize,
+    /// The declick ramp: 1.0 → the scheduled gain over 2 ms (the same shape
+    /// the engine applies to a fresh one-shot).
+    gain: Ramp,
+}
+
 /// A running program — see the module docs.
 pub struct Performance {
-    engine: Engine,
     program: Arc<Program>,
     song: SongSource,
     transport: Transport,
@@ -246,6 +261,11 @@ pub struct Performance {
     fade: Option<(SongSource, usize)>,    // (outgoing source, frames left)
     metrics: PerformanceMetrics,
     capture: Option<Vec<TimestampedCommand>>,
+    sample_rate: u32,
+    /// Stingers rendered at schedule time, indexed by their `PatchId`.
+    stinger_bufs: Vec<Arc<Vec<f32>>>,
+    /// Stingers sounding now (pre-reserved at schedule time).
+    stingers: Vec<ActiveStinger>,
     scratch_l: Vec<f32>,
     scratch_r: Vec<f32>,
     scratch_fl: Vec<f32>,
@@ -261,7 +281,6 @@ impl Performance {
         let transport = Transport::for_program(&program.meta);
         let song = SongSource::build(&program);
         Performance {
-            engine: Engine::new(sr),
             program,
             song,
             transport,
@@ -273,6 +292,9 @@ impl Performance {
             fade: None,
             metrics: PerformanceMetrics::default(),
             capture: None,
+            sample_rate: sr,
+            stinger_bufs: Vec::new(),
+            stingers: Vec::new(),
             scratch_l: vec![0.0; SCRATCH_FRAMES],
             scratch_r: vec![0.0; SCRATCH_FRAMES],
             scratch_fl: vec![0.0; SCRATCH_FRAMES],
@@ -378,10 +400,31 @@ impl Performance {
         Ok(self.seq)
     }
 
-    /// Schedule a stinger: load the doc NOW (the render never happens on the
-    /// render path), fire it at `at` with `gain`.
+    /// Schedule a stinger: render the doc NOW — the fire inside [`fill`](AudioSource::fill)
+    /// then only mixes a pre-rendered buffer, so the render path never
+    /// renders or allocates at fire time — and fire it at `at` with `gain`.
     pub fn stinger(&mut self, doc: &SoundDoc, gain: f32, at: At) -> Result<u64, PerformanceError> {
-        let patch = self.engine.load(doc);
+        // Stingers render at the program's rate: the runtime's one internal
+        // rate (resampling to the device belongs at the adapter).
+        let mut doc = doc.clone();
+        doc.sample_rate = self.sample_rate;
+        let (left, right) = crate::player::render_stereo(&doc);
+        let mut buf = Vec::with_capacity(left.len() * 2);
+        for i in 0..left.len() {
+            buf.push(left[i]);
+            buf.push(right[i]);
+        }
+        let patch = super::PatchId(self.stinger_bufs.len());
+        self.stinger_bufs.push(Arc::new(buf));
+        // Pre-reserve voice room for every queued stinger (including this
+        // one): the fire then never grows the Vec on the render path.
+        let pending = self
+            .queue
+            .iter()
+            .filter(|c| matches!(c.command, Command::Stinger { .. }))
+            .count()
+            + 1;
+        self.stingers.reserve(pending);
         self.schedule(Command::Stinger { patch, gain }, at)
     }
 
@@ -431,6 +474,15 @@ impl Performance {
 
     /// Replay captured commands at their recorded frames, in order.
     pub fn replay(&mut self, commands: &[TimestampedCommand]) {
+        // Same pre-reservation as `stinger()`: replayed stingers must not
+        // grow the voice Vec at fire time either (control side here).
+        let stingers = commands
+            .iter()
+            .filter(|c| matches!(c.command, Command::Stinger { .. }))
+            .count();
+        if stingers > 0 {
+            self.stingers.reserve(stingers);
+        }
         for c in commands {
             // Bypass capture (a replay isn't a new session) and the queue cap
             // is respected: a captured queue always fits again.
@@ -524,9 +576,17 @@ impl Performance {
                 self.metrics.swaps += 1;
             }
             Command::Stinger { patch, gain } => {
-                let handle = self.engine.play(patch);
-                self.engine
-                    .set_gain(handle, gain, Tween::ms(2.0, self.engine.sample_rate()));
+                // A foreign patch id (a capture replayed into a Performance
+                // that never scheduled the stinger) is inert, never a panic.
+                if let Some(buf) = self.stinger_bufs.get(patch.0) {
+                    let mut ramp = Ramp::new(1.0);
+                    ramp.set(gain.max(0.0), Tween::ms(2.0, self.sample_rate));
+                    self.stingers.push(ActiveStinger {
+                        buf: buf.clone(),
+                        pos: 0,
+                        gain: ramp,
+                    });
+                }
                 self.metrics.stingers_fired += 1;
             }
         }
@@ -601,46 +661,63 @@ impl Performance {
             self.scratch_l[..frames].fill(0.0);
             self.scratch_r[..frames].fill(0.0);
         }
-        // The outgoing program's tail during a swap crossfade.
+        // The outgoing program's tail during a swap crossfade (rendered here;
+        // its weight advances per frame in the mix loop below).
         let fading = self.fade.is_some();
         if fading {
-            let (outgoing, left) = self.fade.as_mut().expect("checked");
+            let (outgoing, _) = self.fade.as_mut().expect("checked");
             outgoing.fill(
                 &mut self.scratch_fl[..frames],
                 &mut self.scratch_fr[..frames],
             );
-            *left = left.saturating_sub(frames);
-            if *left == 0 {
-                self.fade = None;
-            }
         }
-        // Stingers through the embedded engine (interleaved).
-        self.engine.fill(&mut self.scratch_e[..out.len()]);
-        let gain0 = self.current_gain();
-        let gain1 = match self.gain_ramp {
-            Some((from, to, left)) => {
-                let left = left.saturating_sub(frames);
-                self.gain_ramp = (left > 0).then_some((from, to, left));
-                to
+        // Stingers: pre-rendered buffers mixed straight in — no render, no
+        // allocation on this path (the render happened at schedule time).
+        {
+            let out_frames = frames;
+            let stereo = &mut self.scratch_e[..out.len()];
+            stereo.fill(0.0);
+            for s in &mut self.stingers {
+                let take = ((s.buf.len() - s.pos) / 2).min(out_frames);
+                for f in 0..take {
+                    let g = s.gain.tick();
+                    stereo[f * 2] += s.buf[s.pos + f * 2] * g;
+                    stereo[f * 2 + 1] += s.buf[s.pos + f * 2 + 1] * g;
+                }
+                s.pos += take * 2;
             }
-            None => gain0,
-        };
+            self.stingers.retain(|s| s.pos < s.buf.len());
+        }
+        // The gain ramp and the swap crossfade advance per FRAME, so their
+        // trajectories are identical under any block size — a slice's length
+        // must never shape the ramp (the transport and command frames are
+        // already blocking-invariant).
+        let mut fade_left = self.fade.as_ref().map(|(_, left)| *left);
         for i in 0..frames {
-            let u = if frames > 1 {
-                i as f32 / (frames - 1) as f32
+            let g = if let Some((from, to, left)) = self.gain_ramp {
+                let u = (GAIN_RAMP_FRAMES - left) as f32 / GAIN_RAMP_FRAMES as f32;
+                self.gain_ramp = (left > 1).then_some((from, to, left - 1));
+                from + (to - from) * u
             } else {
-                1.0
+                self.master_gain
             };
-            let g = gain0 + (gain1 - gain0) * u;
             let mut left = self.scratch_l[i] * g;
             let mut right = self.scratch_r[i] * g;
-            if fading {
-                let fade_u = 1.0 - u;
+            if let Some(fl) = fade_left.filter(|fl| *fl > 0) {
+                let fade_u = fl as f32 / SWAP_FADE_FRAMES as f32;
+                fade_left = Some(fl - 1);
                 left += self.scratch_fl[i] * fade_u;
                 right += self.scratch_fr[i] * fade_u;
             }
             out[i * 2] = left + self.scratch_e[i * 2];
             out[i * 2 + 1] = right + self.scratch_e[i * 2 + 1];
+        }
+        // Commit the crossfade progress: done when its frames ran out.
+        if let Some((_, left)) = &mut self.fade {
+            match fade_left {
+                Some(fl) if fl > 0 => *left = fl,
+                _ => self.fade = None,
+            }
         }
         self.metrics.frames_rendered += frames as u64;
     }
@@ -966,5 +1043,38 @@ mod tests {
             bits(&take_b),
             "the snapshot replays the position"
         );
+    }
+
+    #[test]
+    fn gain_ride_and_swap_fade_are_block_size_invariant() {
+        // The ramp and crossfade advance per frame, so any blocking yields
+        // the same bytes (the threaded soak hammers this across threads).
+        let run_gain = |block: usize| {
+            let mut p = Performance::new(demo_program());
+            p.schedule(Command::Play, At::Immediate).unwrap();
+            p.schedule(Command::SetGain(0.5), At::Frame(1_000)).unwrap();
+            p.schedule(Command::SetGain(1.0), At::Frame(1_500)).unwrap();
+            fill_all(&mut p, 8_000, block)
+        };
+        for block in [1usize, 7, 333, 512, 4096] {
+            assert_eq!(
+                bits(&run_gain(block)),
+                bits(&run_gain(512)),
+                "gain ride diverged at block size {block}"
+            );
+        }
+        let run_swap = |block: usize| {
+            let mut p = Performance::new(demo_program());
+            p.schedule(Command::Play, At::Immediate).unwrap();
+            p.swap_to(other_program(), At::Frame(1_000)).unwrap();
+            fill_all(&mut p, 8_000, block)
+        };
+        for block in [1usize, 7, 333, 512, 4096] {
+            assert_eq!(
+                bits(&run_swap(block)),
+                bits(&run_swap(512)),
+                "swap crossfade diverged at block size {block}"
+            );
+        }
     }
 }

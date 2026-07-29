@@ -4,16 +4,21 @@
 //! *speed* envelope, so a perf regression hiding inside a correct refactor
 //! shows up in the report. One bench per representative kernel family —
 //! oscillator+env, the stereo mixer with automation and a master reverb, a
-//! melodic (piano) seq, a heavy effects chain, and block-by-block streaming.
+//! melodic (piano) seq, a heavy effects chain, block-by-block streaming, the
+//! song→program compiler, the scheduled runtime fill, and 8-track stem
+//! mixing.
 //!
 //! Documents are short (0.3–0.5 s) so the whole suite runs in a couple of
 //! minutes, and each doc is built ONCE outside the measured closure. Run with
 //! `make bench` (report-only — not part of `make verify`).
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
-use tono_core::dsl::SoundDoc;
+use std::sync::Arc;
+use tono_core::dsl::{Adsr, Bus, SeqWave, SoundDoc};
 use tono_core::render;
+use tono_core::runtime::{At, AudioSource, Command, Performance};
+use tono_core::song::{CompileOptions, Song, note};
 use tono_core::streaming::StreamGraph;
 
 /// Parse + validate a bench document once (setup, never measured).
@@ -129,12 +134,160 @@ fn bench_stream_fill(c: &mut Criterion) {
     });
 }
 
+fn amp() -> Adsr {
+    Adsr {
+        a: 0.005,
+        d: 0.1,
+        s: 0.8,
+        r: 0.2,
+        punch: 0.0,
+    }
+}
+
+/// (f) A representative multi-track song: four seq tracks over four bars
+/// with a named section — the shape `Song::compile` and the runtime
+/// benches share.
+fn bench_song() -> Song {
+    let mut song = Song::new("bench-song", 128.0);
+    song.add_track("bass", SeqWave::Bass, amp());
+    song.add_track("keys", SeqWave::Epiano, amp());
+    song.add_track("lead", SeqWave::Square, amp());
+    song.add_track("arp", SeqWave::Sawtooth, amp());
+    song.add_pattern(
+        "riff",
+        1,
+        vec![note(0, 4, "C2"), note(8, 4, "G2"), note(12, 2, "A#2")],
+    );
+    song.add_pattern(
+        "stab",
+        1,
+        vec![note(0, 2, "C4"), note(6, 2, "D#4"), note(10, 2, "G4")],
+    );
+    song.add_pattern(
+        "line",
+        1,
+        vec![
+            note(0, 4, "C5"),
+            note(4, 4, "D5"),
+            note(8, 4, "D#5"),
+            note(12, 4, "G5"),
+        ],
+    );
+    song.add_pattern(
+        "run",
+        1,
+        vec![
+            note(0, 1, "C4"),
+            note(2, 1, "D4"),
+            note(4, 1, "E4"),
+            note(6, 1, "G4"),
+            note(8, 1, "A4"),
+            note(10, 1, "C5"),
+            note(12, 1, "D5"),
+            note(14, 1, "E5"),
+        ],
+    );
+    song.arrange_repeat("bass", "riff", 0, 4);
+    song.arrange_repeat("keys", "stab", 0, 4);
+    song.arrange_repeat("lead", "line", 0, 4);
+    song.arrange_repeat("arp", "run", 0, 4);
+    song.sections.push(tono_core::song::Section {
+        name: "b".into(),
+        bar: 2,
+        bars: 2,
+    });
+    song
+}
+
+/// (g) Eight tracks over four bars, two of them routed to a drum bus with a
+/// reverb insert — the stem-mixing shape.
+fn stems_song() -> Song {
+    let mut song = Song::new("bench-stems", 120.0);
+    let tracks = [
+        ("kick", SeqWave::Square, "C2"),
+        ("snare", SeqWave::Noise, "G2"),
+        ("bass", SeqWave::Bass, "C2"),
+        ("pad", SeqWave::Triangle, "C3"),
+        ("keys", SeqWave::Epiano, "E3"),
+        ("lead", SeqWave::Sawtooth, "G3"),
+        ("hat", SeqWave::Fm, "C4"),
+        ("pluck", SeqWave::Pluck, "E4"),
+    ];
+    for (name, wave, pitch) in tracks {
+        song.add_track(name, wave, amp());
+        song.add_pattern(name, 1, vec![note(0, 4, pitch), note(8, 4, pitch)]);
+        song.arrange_repeat(name, name, 0, 4);
+    }
+    song.buses.push(Bus {
+        id: "drums".into(),
+        gain: 0.9,
+        effects: vec![
+            serde_json::from_str::<tono_core::dsl::Node>(
+                r#"{ "type": "reverb", "room": 0.5, "mix": 0.3 }"#,
+            )
+            .expect("bus insert parses"),
+        ],
+    });
+    song.tracks[0].bus = Some("drums".into());
+    song.tracks[1].bus = Some("drums".into());
+    song
+}
+
+fn bench_compile_song(c: &mut Criterion) {
+    let song = bench_song();
+    let opts = CompileOptions::default();
+    c.bench_function("compile/song_to_program", |b| {
+        b.iter(|| {
+            black_box(&song)
+                .compile(black_box(&opts))
+                .expect("compiles")
+        })
+    });
+}
+
+fn bench_performance_fill(c: &mut Criterion) {
+    let program = Arc::new(
+        bench_song()
+            .compile(&CompileOptions::default())
+            .expect("compiles"),
+    );
+    c.bench_function("scheduling/performance_fill_512", |b| {
+        b.iter_batched(
+            || {
+                // Setup (untimed): a fresh Performance at frame 0, so the
+                // measured fill always covers real content and a command
+                // execution — never the past-the-end silence path.
+                let mut p = Performance::new(program.clone());
+                p.schedule(Command::Play, At::Immediate).expect("play");
+                (p, vec![0.0f32; 512 * 2])
+            },
+            |(mut p, mut block)| {
+                p.fill(black_box(&mut block));
+                black_box(block)
+            },
+            BatchSize::SmallInput,
+        )
+    });
+}
+
+fn bench_stems_8(c: &mut Criterion) {
+    let program = stems_song()
+        .compile(&CompileOptions::default())
+        .expect("compiles");
+    c.bench_function("mixing/tracks_stems_8", |b| {
+        b.iter(|| black_box(&program).render_stems())
+    });
+}
+
 criterion_group!(
     benches,
     bench_blip,
     bench_tracks_mix,
     bench_seq_piano,
     bench_fx_chain,
-    bench_stream_fill
+    bench_stream_fill,
+    bench_compile_song,
+    bench_performance_fill,
+    bench_stems_8
 );
 criterion_main!(benches);

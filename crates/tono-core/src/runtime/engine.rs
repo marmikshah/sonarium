@@ -20,7 +20,7 @@ const CROSSFADE_MIN_MS: f32 = 8.0;
 /// Handle to a loaded patch — an immutable, shareable resource. Cheap to copy;
 /// spawn as many instances of it as you like.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct PatchId(usize);
+pub struct PatchId(pub(crate) usize);
 
 /// Handle to one live instance of a patch. Stable for the instance's lifetime;
 /// setters against a finished/unknown handle are no-ops.
@@ -99,7 +99,7 @@ impl Default for Tween {
 
 /// A per-frame linear ramp toward a target value.
 #[derive(Clone, Copy)]
-struct Ramp {
+pub(super) struct Ramp {
     value: f32,
     target: f32,
     step: f32,
@@ -107,7 +107,7 @@ struct Ramp {
 }
 
 impl Ramp {
-    fn new(v: f32) -> Self {
+    pub(super) fn new(v: f32) -> Self {
         Ramp {
             value: v,
             target: v,
@@ -116,7 +116,7 @@ impl Ramp {
         }
     }
 
-    fn set(&mut self, target: f32, tw: Tween) {
+    pub(super) fn set(&mut self, target: f32, tw: Tween) {
         self.target = target;
         if tw.frames == 0 {
             self.value = target;
@@ -129,7 +129,7 @@ impl Ramp {
     }
 
     /// Advance one frame and return the current value.
-    fn tick(&mut self) -> f32 {
+    pub(super) fn tick(&mut self) -> f32 {
         if self.remaining > 0 {
             self.value += self.step;
             self.remaining -= 1;
