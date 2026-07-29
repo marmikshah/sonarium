@@ -367,7 +367,7 @@ pub fn describe(doc: &SoundDoc) -> DescribeMap {
     // presets::patch precedent); failing loud beats returning an empty map an
     // agent would read as "nothing editable".
     let json = serde_json::to_value(doc).expect("SoundDoc serializes");
-    if let crate::dsl::Node::Tracks { tracks, master } = &doc.root {
+    if let crate::dsl::Node::Tracks { tracks, master, .. } = &doc.root {
         for (i, t) in tracks.iter().enumerate() {
             let mut nodes = Vec::new();
             if let Some(node_json) = json["root"]["tracks"][i].get("node") {

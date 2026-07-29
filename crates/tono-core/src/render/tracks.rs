@@ -227,7 +227,12 @@ fn duck_envelope(
 /// single stream threaded through the track list in order — their audio stays
 /// byte-identical across upgrades.
 pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
-    let Node::Tracks { tracks, master } = &doc.root else {
+    let Node::Tracks {
+        tracks,
+        master,
+        buses,
+    } = &doc.root
+    else {
         return None;
     };
     let sr = doc.sample_rate;
@@ -291,10 +296,19 @@ pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
             rendered.push(TrackRender::Mono { off, sig: mono });
         }
     }
-    // Pass 2 — mix onto the bus: pan/gain (static or automated), the
-    // sidechain duck, and the per-layer contribution stats.
+    // Pass 2 — mix: pan/gain (static or automated), the sidechain duck, and
+    // the per-layer contribution stats. Each track's contribution is built in
+    // a scratch stereo buffer, then routed: to the master bus by default, to
+    // its named `bus` when routed, plus a copy per `send`. A document without
+    // buses routes everything to master — the exact legacy mix.
     let mut layers = Vec::with_capacity(tracks.len());
     let mut energies = Vec::with_capacity(tracks.len());
+    let mut bus_bufs: Vec<(Vec<f32>, Vec<f32>)> = buses
+        .iter()
+        .map(|_| (vec![0.0f32; n], vec![0.0f32; n]))
+        .collect();
+    let bus_index = |id: &str| buses.iter().position(|b| b.id == id);
+    let (mut cl, mut cr) = (vec![0.0f32; n], vec![0.0f32; n]);
     for (ti, t) in tracks.iter().enumerate() {
         let layer_id = layer_ids[ti].clone();
         if let TrackRender::Muted = &rendered[ti] {
@@ -336,10 +350,16 @@ pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
                 .find(|(_, s)| s.id.as_deref() == Some(sc.source.as_str()))?;
             Some(duck_envelope(&rendered[si], source, sc, n, sr))
         });
-        // Contribution stats accumulate over what actually lands on the bus
-        // (post fader/pan/offset/duck, pre master). Per-channel energy keeps
+        // Contribution stats accumulate over what actually lands (post
+        // fader/pan/offset/duck, pre bus/master). Per-channel energy keeps
         // them pan-invariant: gl² + gr² = gain² for any pan.
         let (mut tpeak, mut tsum) = (0.0f32, 0.0f64);
+        cl.fill(0.0);
+        cr.fill(0.0);
+        let off = match &rendered[ti] {
+            TrackRender::Muted => unreachable!("muted layers continue above"),
+            TrackRender::Stereo { off, .. } | TrackRender::Mono { off, .. } => *off,
+        };
         match &rendered[ti] {
             TrackRender::Muted => unreachable!("muted layers continue above"),
             TrackRender::Stereo {
@@ -355,8 +375,8 @@ pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
                         l[i] * gl * std::f32::consts::SQRT_2 * d,
                         r[i] * gr * std::f32::consts::SQRT_2 * d,
                     );
-                    left[i + off] += la;
-                    right[i + off] += ra;
+                    cl[i + off] = la;
+                    cr[i + off] = ra;
                     tpeak = tpeak.max(la.abs()).max(ra.abs());
                     tsum += (la * la + ra * ra) as f64;
                 }
@@ -366,11 +386,38 @@ pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
                     let (gl, gr) = gl_gr(i + off);
                     let d = duck.as_ref().map_or(1.0, |v| v[i + off]);
                     let (la, ra) = (x * gl * d, x * gr * d);
-                    left[i + off] += la;
-                    right[i + off] += ra;
+                    cl[i + off] = la;
+                    cr[i + off] = ra;
                     tpeak = tpeak.max(la.abs()).max(ra.abs());
                     tsum += (la * la + ra * ra) as f64;
                 }
+            }
+        }
+        // Route the main output: the master bus, or the track's named bus.
+        // (Only the contributed range is added — a full-range += 0.0 could
+        // flip a −0.0 sample to +0.0 in slots this track never wrote.)
+        let (dl, dr) = match t.bus.as_deref().and_then(&bus_index) {
+            None => (&mut left, &mut right),
+            Some(bi) => {
+                let (bl, br) = &mut bus_bufs[bi];
+                (bl, br)
+            }
+        };
+        for i in off..n {
+            dl[i] += cl[i];
+            dr[i] += cr[i];
+        }
+        // Post-fader sends: the same contribution, scaled, into each target.
+        // (A track may send to the bus it's routed to — the sends simply add.)
+        for s in &t.sends {
+            let Some(bi) = bus_index(&s.bus) else {
+                continue; // an unvalidated doc's dangling send is ignored
+            };
+            let amount = s.amount.clamp(0.0, 1.0);
+            let (bl, br) = &mut bus_bufs[bi];
+            for i in off..n {
+                bl[i] += cl[i] * amount;
+                br[i] += cr[i] * amount;
             }
         }
         // RMS over the whole timeline (both channels), so layers compare
@@ -389,6 +436,31 @@ pub fn render_tracks(doc: &SoundDoc) -> Option<TracksRender> {
     if total > 0.0 {
         for (l, e) in layers.iter_mut().zip(&energies) {
             l.energy_pct = ((e / total) * 100.0) as f32;
+        }
+    }
+    // Buses: inserts run per bus with its own keyed stream (the same
+    // per-channel treatment as the master chain — a reverb gets the
+    // decorrelated tails), then the return fader, then onto the master bus.
+    // Bus streams are always id-keyed: no historical document has buses, so
+    // there is no shared-stream behavior to preserve.
+    for (bi, b) in buses.iter().enumerate() {
+        let (mut bl, mut br) = std::mem::take(&mut bus_bufs[bi]);
+        let bpath = track_stream_seed(doc.seed, layer_stream_key(&format!("bus:{}", b.id)));
+        let mut brng = Rng::new(bpath);
+        for fx in &b.effects {
+            if let Node::Reverb { room, mix } = fx {
+                bl = reverb(&bl, *room, *mix, sr, 0);
+                br = reverb(&br, *room, *mix, sr, 23);
+            } else {
+                let mut rl = brng.clone();
+                bl = apply_processor(fx, &bl, sr, &mut rl, engine, bpath);
+                br = apply_processor(fx, &br, sr, &mut brng, engine, bpath);
+            }
+        }
+        let gain = if b.gain.is_finite() { b.gain } else { 1.0 };
+        for i in 0..n {
+            left[i] += bl[i] * gain;
+            right[i] += br[i] * gain;
         }
     }
     if per_track_streams {

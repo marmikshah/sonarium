@@ -2,8 +2,8 @@
 //! processor in the DSL — with its per-family serde defaults co-located.
 
 use super::{
-    Adsr, DriveShape, KitStyle, Mode, NoiseColor, SeqNote, SeqWave, SuperWave, TempoPoint, Track,
-    Value, WavetableKind, default_gain,
+    Adsr, Bus, DriveShape, KitStyle, Mode, NoiseColor, SeqNote, SeqWave, SuperWave, TempoPoint,
+    Track, Value, WavetableKind, default_gain,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -371,6 +371,11 @@ pub enum Node {
         /// Processors applied to the stereo master bus, in order.
         #[serde(default)]
         master: Vec<Node>,
+        /// Mix buses: named submixes with their own insert chains, returned
+        /// onto the master bus (see [`Bus`](crate::dsl::Bus)). Empty ⇒ the
+        /// flat mixer documents have always had, byte-identical.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        buses: Vec<Bus>,
     },
     /// Sum (layer) all inputs.
     Mix {
@@ -730,9 +735,15 @@ impl Node {
         let kind = match self {
             Node::Mix { inputs } | Node::Mul { inputs } => ChildrenKind::Slice(inputs.iter()),
             Node::Chain { stages } => ChildrenKind::Slice(stages.iter()),
-            Node::Tracks { tracks, master } => ChildrenKind::Tracks {
+            Node::Tracks {
+                tracks,
+                master,
+                buses,
+            } => ChildrenKind::Tracks {
                 tracks: tracks.iter(),
                 master: master.iter(),
+                buses: buses.iter(),
+                bus_fx: [].iter(),
             },
             Node::Duck { trigger, .. } => ChildrenKind::One(Some(trigger)),
             Node::Square { .. }
@@ -780,9 +791,15 @@ impl Node {
                 ChildrenMutKind::Slice(inputs.iter_mut())
             }
             Node::Chain { stages } => ChildrenMutKind::Slice(stages.iter_mut()),
-            Node::Tracks { tracks, master } => ChildrenMutKind::Tracks {
+            Node::Tracks {
+                tracks,
+                master,
+                buses,
+            } => ChildrenMutKind::Tracks {
                 tracks: tracks.iter_mut(),
                 master: master.iter_mut(),
+                buses: buses.iter_mut(),
+                bus_fx: [].iter_mut(),
             },
             Node::Duck { trigger, .. } => ChildrenMutKind::One(Some(trigger)),
             Node::Square { .. }
@@ -853,6 +870,8 @@ enum ChildrenKind<'a> {
     Tracks {
         tracks: std::slice::Iter<'a, Track>,
         master: std::slice::Iter<'a, Node>,
+        buses: std::slice::Iter<'a, Bus>,
+        bus_fx: std::slice::Iter<'a, Node>,
     },
 }
 
@@ -863,10 +882,26 @@ impl<'a> Iterator for Children<'a> {
             ChildrenKind::None => None,
             ChildrenKind::One(x) => x.take(),
             ChildrenKind::Slice(it) => it.next(),
-            ChildrenKind::Tracks { tracks, master } => match tracks.next() {
-                Some(t) => Some(&t.node),
-                None => master.next(),
-            },
+            ChildrenKind::Tracks {
+                tracks,
+                master,
+                buses,
+                bus_fx,
+            } => {
+                if let Some(t) = tracks.next() {
+                    return Some(&t.node);
+                }
+                if let Some(m) = master.next() {
+                    return Some(m);
+                }
+                loop {
+                    if let Some(fx) = bus_fx.next() {
+                        return Some(fx);
+                    }
+                    let b = buses.next()?;
+                    *bus_fx = b.effects.iter();
+                }
+            }
         }
     }
 }
@@ -883,6 +918,8 @@ enum ChildrenMutKind<'a> {
     Tracks {
         tracks: std::slice::IterMut<'a, Track>,
         master: std::slice::IterMut<'a, Node>,
+        buses: std::slice::IterMut<'a, Bus>,
+        bus_fx: std::slice::IterMut<'a, Node>,
     },
 }
 
@@ -893,10 +930,26 @@ impl<'a> Iterator for ChildrenMut<'a> {
             ChildrenMutKind::None => None,
             ChildrenMutKind::One(x) => x.take(),
             ChildrenMutKind::Slice(it) => it.next(),
-            ChildrenMutKind::Tracks { tracks, master } => match tracks.next() {
-                Some(t) => Some(&mut t.node),
-                None => master.next(),
-            },
+            ChildrenMutKind::Tracks {
+                tracks,
+                master,
+                buses,
+                bus_fx,
+            } => {
+                if let Some(t) = tracks.next() {
+                    return Some(&mut t.node);
+                }
+                if let Some(m) = master.next() {
+                    return Some(m);
+                }
+                loop {
+                    if let Some(fx) = bus_fx.next() {
+                        return Some(fx);
+                    }
+                    let b = buses.next()?;
+                    *bus_fx = b.effects.iter_mut();
+                }
+            }
         }
     }
 }

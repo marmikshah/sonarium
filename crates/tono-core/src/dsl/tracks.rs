@@ -51,6 +51,48 @@ pub struct Track {
     /// in a natively streamed sound).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidechain: Option<Sidechain>,
+    /// The mix bus this track's main output routes to (e.g. `"drums"`,
+    /// `"reverb"`). None ⇒ the master bus, the only behavior documents had
+    /// before this field existed, so they render byte-identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus: Option<String>,
+    /// Post-fader sends: copies of this track's positioned stereo signal
+    /// (post fader/pan/duck), each scaled by its amount, into mix buses.
+    /// Empty ⇒ the render is byte-identical to a document without this field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sends: Vec<Send>,
+}
+
+/// A mix bus in a [`Node::Tracks`] root: a named submix with its own insert
+/// chain, returned onto the master bus. Tracks route to it with their `bus`
+/// field and feed it with `sends`; the rendered mix without it is
+/// byte-identical, so buses are purely additive.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Bus {
+    /// Stable bus id — a short slug like `"drums"` or `"reverb"`, unique
+    /// within the document (and never colliding with a track id).
+    pub id: String,
+    /// The bus return fader, 0..2 (1 = unity).
+    #[serde(default = "default_gain")]
+    pub gain: f32,
+    /// Insert chain on the bus (stereo processors, applied like the master
+    /// chain — a reverb gets the decorrelated-tails treatment).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<Node>,
+}
+
+/// A post-fader send into a mix bus.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct Send {
+    /// The target bus's id.
+    pub bus: String,
+    /// Send level, 0..1 (0 = silent, 1 = the full post-fader signal).
+    #[serde(default = "default_send_amount")]
+    pub amount: f32,
+}
+
+fn default_send_amount() -> f32 {
+    0.5
 }
 
 /// A tracks-level sidechain link: the follower's post-fader signal is

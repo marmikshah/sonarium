@@ -1721,3 +1721,120 @@ fn granular_pitch_two_shifts_the_spectrum_up() {
         "pitch 2 shifts the peak up an octave: {two} Hz"
     );
 }
+
+/// A track routed to a bus reaches the master through the bus's return:
+/// a zero-gain bus silences the routed track while a direct track plays.
+#[test]
+fn tracks_bus_routes_through_the_return_fader() {
+    let mk = |bus_gain: f32| {
+        doc(&format!(
+            r#"{{ "name":"t", "duration":0.3, "seed":1, "version":2,
+                "root":{{ "type":"tracks", "buses":[ {{ "id":"drums", "gain":{bus_gain} }} ],
+                  "tracks":[
+                    {{ "id":"routed", "node":{{ "type":"sawtooth", "freq":220 }}, "gain":1.0, "bus":"drums" }},
+                    {{ "id":"direct", "node":{{ "type":"sine", "freq":440 }}, "gain":0.1 }}
+                  ] }} }}"#
+        ))
+    };
+    let open = render_tracks(&mk(1.0)).unwrap();
+    let shut = render_tracks(&mk(0.0)).unwrap();
+    // The direct track sounds in both; the routed track vanishes with the
+    // return fader down.
+    let body = |r: &TracksRender| rms(&r.left[..r.left.len() / 4]);
+    assert!(
+        body(&shut) < body(&open) * 0.3,
+        "the return fader gates the routed track: {} vs {}",
+        body(&open),
+        body(&shut)
+    );
+}
+
+/// A post-fader send feeds a copy into the bus: a short note sent to a
+/// reverb bus leaves a tail past its own length; the same mix without the
+/// send doesn't.
+#[test]
+fn tracks_send_feeds_a_reverb_bus() {
+    let mk = |send: &str| {
+        doc(&format!(
+            r#"{{ "name":"t", "duration":1.0, "seed":1, "version":2,
+                "root":{{ "type":"tracks",
+                  "buses":[ {{ "id":"verb", "gain":1.0, "effects":[ {{ "type":"reverb", "room":0.7, "mix":1.0 }} ] }} ],
+                  "tracks":[
+                    {{ "id":"hit", "node":{{ "type":"mul", "inputs":[
+                        {{ "type":"sawtooth", "freq":220 }},
+                        {{ "type":"env", "a":0.001, "d":0.1, "s":0.0, "r":0.02 }} ] }},
+                      "sends":[ {{ "bus":"verb", "amount":{send} }} ] }}
+                  ] }} }}"#
+        ))
+    };
+    let sent = render_tracks(&mk("0.8")).unwrap();
+    let dry = render_tracks(&mk("0.0")).unwrap();
+    // The note dies by ~0.15 s; the tail past 0.5 s is only there via the send.
+    let n = sent.left.len();
+    let tail = |r: &TracksRender| rms(&r.left[n / 2..]);
+    assert!(
+        tail(&sent) > tail(&dry) * 3.0 + 1e-6,
+        "the send leaves a reverb tail"
+    );
+    assert!(
+        rms(&sent.left[..n / 8]) > 1e-3,
+        "the dry note still sounds up front"
+    );
+}
+
+/// Bus inserts process only what reaches the bus: a lowpass on the bus
+/// darkens the routed track but leaves the direct track untouched.
+#[test]
+fn bus_inserts_process_only_the_routed_signal() {
+    let d = doc(r#"{ "name":"t", "duration":0.3, "seed":1, "version":2,
+        "root":{ "type":"tracks",
+          "buses":[ { "id":"dark", "gain":1.0, "effects":[ { "type":"lowpass", "cutoff":300, "q":0.7 } ] } ],
+          "tracks":[
+            { "id":"routed", "node":{ "type":"sawtooth", "freq":220 }, "bus":"dark" },
+            { "id":"direct", "node":{ "type":"sawtooth", "freq":220 } }
+          ] } }"#);
+    let r = render_tracks(&d).unwrap();
+    let bright = |s: &[f32]| {
+        // Cheap brightness: high-frequency energy via first differences.
+        s.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>()
+    };
+    // The same saw direct vs filtered: compare against a no-insert mix.
+    let plain = doc(r#"{ "name":"t", "duration":0.3, "seed":1, "version":2,
+        "root":{ "type":"tracks",
+          "buses":[ { "id":"dark", "gain":1.0 } ],
+          "tracks":[
+            { "id":"routed", "node":{ "type":"sawtooth", "freq":220 }, "bus":"dark" },
+            { "id":"direct", "node":{ "type":"sawtooth", "freq":220 } }
+          ] } }"#);
+    let p = render_tracks(&plain).unwrap();
+    assert!(
+        bright(&r.left) < bright(&p.left) * 0.9,
+        "the bus insert darkens the mix: {} vs {}",
+        bright(&r.left),
+        bright(&p.left)
+    );
+}
+
+/// The new fields round-trip through serde (and stay out of the way when
+/// absent — older documents parse unchanged).
+#[test]
+fn buses_and_sends_round_trip_through_serde() {
+    let d = doc(r#"{ "name":"t", "duration":0.1, "seed":1, "version":2,
+        "root":{ "type":"tracks",
+          "buses":[ { "id":"verb", "gain":0.8, "effects":[ { "type":"reverb", "room":0.5, "mix":0.3 } ] } ],
+          "tracks":[
+            { "id":"a", "node":{ "type":"sine", "freq":440 }, "bus":"verb",
+              "sends":[ { "bus":"verb", "amount":0.4 } ] }
+          ] } }"#);
+    d.validate().expect("a wired-up bus mix validates");
+    let json = serde_json::to_string(&d).unwrap();
+    let back: SoundDoc = serde_json::from_str(&json).unwrap();
+    let bits = |s: &[f32]| s.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    let a = render_tracks(&d).unwrap();
+    let b = render_tracks(&back).unwrap();
+    assert_eq!(
+        bits(&a.left),
+        bits(&b.left),
+        "serde round-trip keeps the render"
+    );
+}
