@@ -39,6 +39,9 @@ pub struct Program {
     pub engine_version: u32,
     /// Canonical content hash (see [`content_hash`]). Re-verified on load.
     pub hash: u64,
+    /// The target this program was compiled for (offline or runtime).
+    #[serde(default)]
+    pub target: crate::song::CompileTarget,
     /// The resolved document — renders through the exact same engine as
     /// everything else; nothing new in the render path.
     pub doc: SoundDoc,
@@ -233,6 +236,18 @@ impl Program {
         self.warnings.is_empty()
     }
 
+    /// The machine-readable capability list: what this program can do on a
+    /// host — `"offline-render"` and `"stems"` always; `"streaming"` when the
+    /// resolved document streams natively. Derived from the warnings (a pure
+    /// function of the document), so it's identical from any loader.
+    pub fn capabilities(&self) -> Vec<&'static str> {
+        let mut caps = vec!["offline-render", "stems"];
+        if self.is_streamable() {
+            caps.push("streaming");
+        }
+        caps
+    }
+
     /// Serialize the bundle (compact JSON; stable field order from the struct).
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("a program serializes")
@@ -335,7 +350,10 @@ mod tests {
         let loaded = Program::from_json(&program.to_json()).expect("loads");
         assert_eq!(loaded.hash, program.hash);
         assert_eq!(loaded.warnings.len(), program.warnings.len());
+        assert_eq!(loaded.target, program.target);
         assert_eq!(loaded.render_mono(), program.render_mono());
+        // The capability list is machine-readable and derived on load.
+        assert!(loaded.capabilities().contains(&"streaming"));
     }
 
     #[test]
