@@ -74,6 +74,14 @@ pub struct SongTrack {
     /// Per-track humanize override (0..1); `None` uses the song's humanize.
     #[serde(default)]
     pub humanize: Option<f32>,
+    /// Muted tracks compile to a muted mixer layer (present but silent).
+    #[serde(default)]
+    pub mute: bool,
+    /// When ANY track is solo, every non-solo track is muted — the console
+    /// behavior, deterministic regardless of declaration order. A track that
+    /// is both muted and solo stays muted.
+    #[serde(default)]
+    pub solo: bool,
 }
 
 /// A reusable phrase: notes on the bar grid, `bars` long. Note `step`s are
@@ -129,6 +137,11 @@ pub struct Song {
     /// A master effect chain over the whole mix.
     #[serde(default)]
     pub master: Vec<Node>,
+    /// Song-level deterministic seed, stamped onto the compiled document's
+    /// `seed` (the RNG stream everything stochastic draws from). `None` keeps
+    /// the document default (0). Same song + same seed ⇒ same program hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
     /// DSP-kernel revision this song is pinned to (see [`ENGINE_VERSION`]),
     /// stamped at creation. A song saved as JSON therefore reopens and renders
     /// byte-identically on newer tonos, exactly like a `SoundDoc` — kernel
@@ -209,9 +222,17 @@ impl Song {
             patterns: Vec::new(),
             arrangement: Vec::new(),
             master: Vec::new(),
+            seed: None,
             engine: Some(ENGINE_VERSION),
             version: Some(crate::dsl::SCHEMA_VERSION),
         }
+    }
+
+    /// Set the song-level deterministic seed (builder style) — see
+    /// [`Song::seed`].
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = Some(seed);
+        self
     }
 
     /// Add an instrument track. The name becomes the rendered layer id, so it
@@ -234,6 +255,8 @@ impl Song {
             reverb: 0.0,
             swing: None,
             humanize: None,
+            mute: false,
+            solo: false,
         });
         self
     }
@@ -268,6 +291,8 @@ impl Song {
             reverb: instrument.reverb,
             swing: instrument.swing,
             humanize: instrument.humanize,
+            mute: false,
+            solo: false,
         });
         self
     }

@@ -70,10 +70,11 @@ impl Song {
         }
 
         let sec_per_step = 60.0 / (self.bpm.max(1.0) * self.steps_per_beat.max(1) as f32);
+        let any_solo = self.tracks.iter().any(|t| t.solo);
         let mut end_step = 0u32;
         let mut doc_tracks = Vec::with_capacity(self.tracks.len());
         for t in &self.tracks {
-            doc_tracks.push(self.compile_track(t, &mut end_step)?);
+            doc_tracks.push(self.compile_track(t, &mut end_step, any_solo)?);
         }
 
         let duration = end_step as f32 * sec_per_step + 2.0; // tail for release/reverb
@@ -101,8 +102,15 @@ impl Song {
 
     /// Compile one song track to a mixer [`Track`]: merge its direct notes with
     /// its pattern placements, build the seq node, and wrap the reverb send.
-    /// Extends `end_step` to the track's last note end.
-    fn compile_track(&self, t: &SongTrack, end_step: &mut u32) -> Result<Track, SongError> {
+    /// Extends `end_step` to the track's last note end. `any_solo` carries the
+    /// song-level solo state: when any track is solo, every non-solo track is
+    /// muted (a muted solo track stays muted).
+    fn compile_track(
+        &self,
+        t: &SongTrack,
+        end_step: &mut u32,
+        any_solo: bool,
+    ) -> Result<Track, SongError> {
         let steps_per_bar = self.steps_per_bar();
         let mut notes: Vec<SeqNote> = t.notes.clone();
         for n in &notes {
@@ -183,7 +191,7 @@ impl Song {
             pan: t.pan,
             gain: t.gain,
             at: 0.0,
-            mute: false,
+            mute: t.mute || (any_solo && !t.solo),
             automation: Vec::new(),
             sidechain: None,
         })
