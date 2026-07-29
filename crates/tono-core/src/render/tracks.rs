@@ -493,7 +493,7 @@ fn render_tracks_impl(
         // Route the main output: the master bus, or the track's named bus.
         // (Only the contributed range is added — a full-range += 0.0 could
         // flip a −0.0 sample to +0.0 in slots this track never wrote.)
-        let (dl, dr) = match t.bus.as_deref().and_then(&bus_index) {
+        let (dl, dr) = match t.bus.as_deref().and_then(bus_index) {
             None => (&mut left, &mut right),
             Some(bi) => {
                 let (bl, br) = &mut bus_bufs[bi];
