@@ -4323,7 +4323,7 @@ checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
 
 [[package]]
 name = "tono"
-version = "1.9.0"
+version = "1.10.0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -4340,7 +4340,7 @@ dependencies = [
 
 [[package]]
 name = "tono-capi"
-version = "1.9.0"
+version = "1.10.0"
 dependencies = [
  "serde_json",
  "tono-core",
@@ -4348,7 +4348,7 @@ dependencies = [
 
 [[package]]
 name = "tono-core"
-version = "1.9.0"
+version = "1.10.0"
 dependencies = [
  "anyhow",
  "criterion",
@@ -4364,7 +4364,7 @@ dependencies = [
 
 [[package]]
 name = "tono-desktop"
-version = "1.9.0"
+version = "1.10.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4378,7 +4378,7 @@ dependencies = [
 
 [[package]]
 name = "tono-play"
-version = "1.9.0"
+version = "1.10.0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -4388,7 +4388,7 @@ dependencies = [
 
 [[package]]
 name = "tono-py"
-version = "1.9.0"
+version = "1.10.0"
 dependencies = [
  "numpy",
  "pyo3",
@@ -4399,7 +4399,7 @@ dependencies = [
 
 [[package]]
 name = "tono-wasm"
-version = "1.9.0"
+version = "1.10.0"
 dependencies = [
  "js-sys",
  "serde",
