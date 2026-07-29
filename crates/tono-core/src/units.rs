@@ -296,6 +296,117 @@ pub fn beat_to_frames(beat: Beat, tempo: Tempo, rate: SampleRate) -> Frames {
     Frames(frames.round().max(0.0) as u64)
 }
 
+/// A time-signature change at a bar (0-based), for the meter map: from `bar`
+/// until the next change, a bar is `numerator`/`denominator` long. In the
+/// song's beat grid a bar is `numerator × (4 / denominator)` quarter-note
+/// beats (6/8 = 3, 3/4 = 3, 4/4 = 4). Denominators must be powers of two.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct MeterPoint {
+    /// The bar the change takes effect at (0-based). The first point must be
+    /// bar 0 when a meter map is present.
+    pub bar: u32,
+    /// Beats per bar (the time-signature numerator).
+    pub numerator: u32,
+    /// The note value one beat is written in (4 = quarter, 8 = eighth).
+    pub denominator: u32,
+}
+
+/// The meter in effect at `bar` under a meter map (the last point at or
+/// before it; `default_numerator`/4 when the map is empty or starts later).
+pub fn meter_at(map: &[MeterPoint], default_numerator: u32, bar: u32) -> MeterPoint {
+    let fallback = MeterPoint {
+        bar: 0,
+        numerator: default_numerator.max(1),
+        denominator: 4,
+    };
+    map.iter()
+        .rev()
+        .find(|p| p.bar <= bar)
+        .copied()
+        .unwrap_or(fallback)
+}
+
+/// The length of bar `index` in quarter-note beats: `pickup` for bar 0 when
+/// set, otherwise the meter in effect (`numerator × 4/denominator`).
+pub fn bar_len(
+    map: &[MeterPoint],
+    default_numerator: u32,
+    pickup: Option<Beat>,
+    index: u32,
+) -> Beat {
+    if index == 0
+        && let Some(p) = pickup
+    {
+        return p;
+    }
+    let meter = meter_at(map, default_numerator, index);
+    Beat::new(meter.numerator as i64 * 4, meter.denominator)
+}
+
+/// The exact beat `bar` starts at — the pickup plus the meter walk,
+/// segment-wise (the map is short, so a pathological bar costs O(map), not
+/// O(bar)). Saturates rather than wraps at absurd bars.
+pub fn beat_at_bar(
+    map: &[MeterPoint],
+    default_numerator: u32,
+    pickup: Option<Beat>,
+    bar: u32,
+) -> Beat {
+    let mut beats = Beat::zero();
+    if bar == 0 {
+        return beats;
+    }
+    beats = beats
+        .checked_add(bar_len(map, default_numerator, pickup, 0))
+        .unwrap_or(Beat::new(i64::MAX, 1));
+    let mut i = 1u32;
+    while i < bar {
+        let seg_end = map
+            .iter()
+            .map(|p| p.bar)
+            .filter(|b| *b > i)
+            .min()
+            .unwrap_or(u32::MAX)
+            .min(bar);
+        let span = bar_len(map, default_numerator, pickup, i)
+            .scale(i64::from(seg_end - i))
+            .unwrap_or(Beat::new(i64::MAX, 1));
+        beats = beats.checked_add(span).unwrap_or(Beat::new(i64::MAX, 1));
+        i = seg_end;
+    }
+    beats
+}
+
+/// Bars elapsed at `beat` under the meter map (binary search over the
+/// monotonic beat walk; saturates at absurd inputs).
+pub fn bar_count_at_beat(
+    map: &[MeterPoint],
+    default_numerator: u32,
+    pickup: Option<Beat>,
+    beat: Beat,
+) -> u32 {
+    if beat <= Beat::zero() {
+        return 0;
+    }
+    let mut lo = 0u32;
+    let mut hi = 1u32;
+    while beat_at_bar(map, default_numerator, pickup, hi) < beat {
+        hi = hi.saturating_mul(2);
+        if hi == u32::MAX {
+            return hi;
+        }
+    }
+    while lo + 1 < hi {
+        let mid = lo + (hi - lo) / 2;
+        if beat_at_bar(map, default_numerator, pickup, mid) < beat {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    hi
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

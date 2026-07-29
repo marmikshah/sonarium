@@ -697,6 +697,26 @@ pub fn tempo_map_bpm_at(map: &[TempoPoint], beat: f64) -> f64 {
     bpm
 }
 
+/// The inverse of [`tempo_map_seconds_at`]: the beat position at `seconds`
+/// under the map — the segment walk in f64, exact per ADR 0002. The map must
+/// be non-empty and start at beat 0.
+pub fn tempo_map_beat_at_seconds(map: &[TempoPoint], seconds: f64) -> f64 {
+    let mut secs = 0.0;
+    let mut prev_beat = 0.0f64;
+    let mut bpm = (map[0].bpm as f64).max(1.0);
+    for p in &map[1..] {
+        let at = p.at.to_f64();
+        let span_secs = (at - prev_beat) * 60.0 / bpm;
+        if seconds < secs + span_secs {
+            return prev_beat + (seconds - secs) * bpm / 60.0;
+        }
+        secs += span_secs;
+        prev_beat = at;
+        bpm = (p.bpm as f64).max(1.0);
+    }
+    prev_beat + (seconds - secs) * bpm / 60.0
+}
+
 impl SoundDoc {
     /// The schema version this document's render semantics follow (omitted ⇒ 1).
     pub fn effective_version(&self) -> u32 {

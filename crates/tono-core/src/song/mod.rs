@@ -148,20 +148,7 @@ pub struct Placement {
     pub bar: u32,
 }
 
-/// A time-signature change at a bar (0-based), for the meter map: from `bar`
-/// until the next change, a bar is `numerator`/`denominator` long. In the
-/// song's beat grid a bar is `numerator × (4 / denominator)` quarter-note
-/// beats (6/8 = 3, 3/4 = 3, 4/4 = 4). Denominators must be powers of two.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-pub struct MeterPoint {
-    /// The bar the change takes effect at (0-based). The first point must be
-    /// bar 0 when a meter map is present.
-    pub bar: u32,
-    /// Beats per bar (the time-signature numerator).
-    pub numerator: u32,
-    /// The note value one beat is written in (4 = quarter, 8 = eighth).
-    pub denominator: u32,
-}
+pub use crate::units::MeterPoint;
 
 /// A named range of bars — a verse, a chorus, a build. Sections are musical
 /// metadata: they render nothing themselves, but they are compiled into the
