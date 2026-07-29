@@ -19,7 +19,9 @@ env:
 
 jobs:
   ci:
-    if: github.event.pull_request.draft == false
+    # Non-draft PRs and master pushes (on master the draft field is undefined,
+    # so the condition must pass on the push event explicitly).
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     # The pinned production toolchain comes from rust-toolchain.toml (1.88.0);
     # the golden corpus's per-platform pins (engine ≤ 4) are validated on this
     # runner's matching platform only — ubuntu-linux covers the linux set, the
