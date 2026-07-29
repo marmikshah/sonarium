@@ -405,7 +405,10 @@ const CORPUS: &[Case] = &[
             0xecd8fea88e3d1125,
             Some((0xc9d8d2534019a40a, 0xdc1a60d87163b2be)),
         ),
-        linux: None,
+        linux: Some((
+            0x32595abfa5a05f15,
+            Some((0xb6f962751dfb0552, 0xc4a8081d488b7c41)),
+        )),
     },
     Case {
         // Bus routing: a pad routed to a reverb bus, a kick sent to it.
@@ -426,7 +429,10 @@ const CORPUS: &[Case] = &[
             0x9be3ed8b32bcf69f,
             Some((0x90a3cdf1747ca6c6, 0x577c2b180bd35620)),
         ),
-        linux: None,
+        linux: Some((
+            0x707583fb59b4eb8c,
+            Some((0x34ede9f0b825bda8, 0xd23834683363d62b)),
+        )),
     },
 ];
 
