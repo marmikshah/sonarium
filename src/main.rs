@@ -34,6 +34,15 @@ USAGE:
     tono midi FILE.json [-o FILE.mid]
         Export a SoundDoc's sequences to a Standard MIDI File.
 
+    tono compile SONG.json [-o FILE] [--sample-rate N] [--inspect]
+        Compile a Song into a validated, hashed Program bundle
+        (<name>.program.json by default; an existing default path is
+        never overwritten). Every problem is reported in one pass — on
+        failure each diagnostic prints with its code, path, and fix,
+        and the exit code is non-zero. --inspect prints the
+        machine-readable summary (hash, version pins, track roster,
+        resource estimates, warnings) as JSON and writes nothing.
+
     tono import FILE.mid [-o DOC.json] [--steps-per-beat 4]
         Import a Standard MIDI File as a renderable SoundDoc of seq
         tracks (GM programs map to the built-in voices; channel 10
@@ -85,6 +94,7 @@ fn main() -> anyhow::Result<()> {
         Some("vary") => vary_cmd(&args[2..]),
         Some("schema") => schema_cmd(&args[2..]),
         Some("midi") => midi_cmd(&args[2..]),
+        Some("compile") => compile_cmd(&args[2..]),
         Some("import") => import_cmd(&args[2..]),
         Some("diff") => diff_cmd(&args[2..]),
         Some("match") => match_cmd(&args[2..]),
@@ -407,6 +417,62 @@ fn midi_cmd(args: &[String]) -> anyhow::Result<()> {
         out.display(),
         summary.notes,
         summary.tracks
+    );
+    Ok(())
+}
+
+/// `tono compile` — a Song becomes a validated, hashed Program bundle.
+fn compile_cmd(args: &[String]) -> anyhow::Result<()> {
+    let usage = "tono compile SONG.json [-o FILE] [--sample-rate N] [--inspect]";
+    let cli = Cli::parse(args, &["-o", "--out", "--sample-rate"], &["--inspect"])?;
+    let file = cli.input(usage)?;
+    let sample_rate =
+        match cli.flag(&["--sample-rate"]) {
+            Some(v) => Some(v.parse::<u32>().map_err(|_| {
+                anyhow::anyhow!("--sample-rate must be a positive integer, got '{v}'")
+            })?),
+            None => None,
+        };
+    let program = tono::compile::compile_song(file, sample_rate)?;
+    for w in &program.warnings {
+        eprintln!("{} {} {}: {}", w.severity, w.code, w.path, w.message);
+    }
+    if cli.has("--inspect") {
+        let inspect = tono::compile::inspect_json(&program);
+        println!("{}", serde_json::to_string_pretty(&inspect)?);
+        return Ok(());
+    }
+    let out = match cli.flag(&["-o", "--out"]) {
+        Some(o) => PathBuf::from(o),
+        None => {
+            let stem = if program.meta.name.is_empty() {
+                Path::new(file)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("song")
+                    .to_string()
+            } else {
+                sanitize_stem(&program.meta.name)?
+            };
+            let default = PathBuf::from(format!("{stem}.program.json"));
+            // A defaulted output must never silently clobber an existing file.
+            if default.exists() {
+                anyhow::bail!(
+                    "{} already exists — pass -o to choose a different output",
+                    default.display()
+                );
+            }
+            default
+        }
+    };
+    fs::write(&out, program.to_json())?;
+    println!(
+        "{} — hash {:#018x}, {:.2}s, {} tracks, {} events",
+        out.display(),
+        program.hash,
+        program.meta.duration_secs,
+        program.meta.tracks.len(),
+        program.estimates.events,
     );
     Ok(())
 }

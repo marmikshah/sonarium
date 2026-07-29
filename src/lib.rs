@@ -12,12 +12,13 @@
 #![warn(missing_docs)]
 
 pub use tono_core::{
-    adaptive, analysis, catalog, drumkit, dsl, dsp, edit, instrument, patch, player, prelude,
-    presets, render, runtime, song, streaming, vary,
+    adaptive, analysis, catalog, diag, drumkit, dsl, dsp, edit, ids, instrument, patch, player,
+    prelude, presets, program, render, runtime, song, streaming, units, vary,
 };
 
 pub mod audio;
 pub mod audition;
+pub mod compile;
 pub mod diff;
 pub mod fit;
 pub mod imaging;

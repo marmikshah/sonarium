@@ -157,6 +157,22 @@ engine.drumkit().note_on(36, 1.0)            # kick
 engine.load_patch(impact_json).trigger(hardness=0.8, size=0.3)  # zero WAVs
 ```
 
+**Songs** — a composition compiles once into a hashed **Program** (resolved
+document + musical metadata + resource estimates + streaming warnings), and
+the same song produces the same canonical hash from Rust or Python
+(experimental through the 1.10.0 alphas — see
+[docs/api-tiers.md](docs/api-tiers.md)):
+
+```python
+song = tono.Song("night-drive", tempo=122)
+bass = song.track("bass", tono.instruments.bass("finger"))
+riff = tono.Pattern(bars=1)
+riff.notes(["C2", "C2", "Eb2", "G2"], durations=0.5)
+song.arrange(bass, riff, bars=range(4))
+program = song.compile(sample_rate=48_000)
+audio = program.render()                     # float32 (frames, 2)
+```
+
 The Rust crates install from crates.io; the Python extension
 [builds from source](crates/tono-py/README.md). More:
 [embedding & patches](docs/runtime.md) · [API docs](https://docs.rs/tono-core).
