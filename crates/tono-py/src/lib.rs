@@ -28,6 +28,7 @@ use pyo3::prelude::*;
 use tono_core::dsl::SoundDoc;
 use tono_core::patch::Patch as CorePatch;
 
+mod harmony;
 mod song;
 mod stream;
 
@@ -117,5 +118,6 @@ fn _tono(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Patch>()?;
     stream::register(m)?;
     song::register(m)?;
+    harmony::register(m)?;
     Ok(())
 }
