@@ -148,6 +148,13 @@ impl LaneCursor {
     /// the rendered bytes) are unchanged.
     pub(crate) fn at(&mut self, i: usize, sr: u32) -> f32 {
         let t = i as f32 / sr as f32;
+        // An unvalidated doc with sample_rate 0 makes frame 0 NaN (0.0/0.0),
+        // which every comparison below rejects — hold the first point
+        // instead of scanning off the end (infinite times already take the
+        // `>= last.t` branch).
+        if t.is_nan() {
+            return self.pts[0].v;
+        }
         if t <= self.pts[0].t {
             return self.pts[0].v;
         }
