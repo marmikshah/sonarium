@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Changed
+- **The composition API is frozen (rc.1).** Every release gate in issue #52
+  is met and evidenced in docs/release-gates.md, so the surface that was
+  experimental through the alphas — `Song`/`Pattern`/`Phrase`, the pattern
+  algebra, the `music` harmony types, `Song::compile` → `Program`,
+  `Transport`/`Performance`, and the typed Python API — is **stable as of
+  1.10.0-rc.1** (docs/api-tiers.md). Frozen with it: the document schema
+  (SCHEMA_VERSION 2), the Program bundle format (PROGRAM_VERSION 1), and
+  the DSP engine (ENGINE_VERSION 5). From here to v1.10.0, release-blocking
+  fixes only.
+- **Selected-range rendering**: `Program::render_range_frames` /
+  `render_range_bars` (a slice of the full render, so tails crossing the
+  boundary sound as in the full mix), and `program.render_range()` in
+  Python.
+
 ### Deferred
 - **Opus export** — evaluated for alpha.2 and deferred to the portability
   slice (1.10.0-beta.1): a production Opus encoder means binding libopus

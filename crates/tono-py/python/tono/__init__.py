@@ -1,6 +1,6 @@
 """tono — a deterministic sound engine, from Python.
 
-The **typed API** (experimental through the 1.10.0 alphas, see
+The **typed API** (stable — frozen at 1.10.0-rc.1, see
 docs/api-tiers.md) authors and compiles songs natively — `Song`, `Pattern`,
 `Track`, `Program`, the `instruments` catalog — with no JSON in the path and a
 canonical program hash equivalent songs reproduce from Rust or Python alike.

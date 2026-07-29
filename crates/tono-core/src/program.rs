@@ -10,7 +10,7 @@
 //! mutating a public field invalidates [`Program::hash`] (a round-trip
 //! through [`Program::from_json`] re-verifies and catches it).
 //!
-//! This API is **experimental** through the 1.10.0 alphas (docs/api-tiers.md).
+//! This API is **stable** — frozen at 1.10.0-rc.1 (docs/api-tiers.md).
 
 use serde::{Deserialize, Serialize};
 

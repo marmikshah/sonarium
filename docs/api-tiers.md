@@ -21,8 +21,9 @@ CLI's command surface.
 ## Experimental
 
 New surface finding its shape — marked `experimental` in rustdoc/stubs and
-in the changelog. The Song → Program composition API is experimental
-through the 1.10.0 alphas and freezes at 1.10.0-rc.1.
+in the changelog. **The Song → Program → Performance composition API and the
+typed Python API were experimental through the 1.10.0 alphas and FROZE at
+1.10.0-rc.1 — they are stable now.** Nothing is currently experimental.
 
 - May change in any minor release, with the change called out in the
   changelog's `### Changed` section.

@@ -20,8 +20,8 @@ impl Phrase {
     /// typed pattern-construction entry point for the binding faces (the
     /// Python `tono.Pattern` builds its notes through one of these, then hands
     /// them to [`Song::add_pattern`](super::Song::add_pattern) via
-    /// [`into_notes`](Self::into_notes)). This API is **experimental** through
-    /// the 1.10.0 alphas (docs/api-tiers.md).
+    /// [`into_notes`](Self::into_notes)). This API is **stable** — frozen
+    /// at 1.10.0-rc.1 (docs/api-tiers.md).
     pub fn new(steps_per_beat: u32) -> Self {
         Phrase {
             steps_per_beat: steps_per_beat.max(1),

@@ -11,7 +11,7 @@
 //! schedule time, so firing one mid-callback only mixes a pre-rendered
 //! buffer — no render, no allocation on the render path.
 //!
-//! This API is **experimental** through the 1.10.0 alphas (docs/api-tiers.md).
+//! This API is **stable** — frozen at 1.10.0-rc.1 (docs/api-tiers.md).
 
 use std::collections::VecDeque;
 use std::sync::Arc;
