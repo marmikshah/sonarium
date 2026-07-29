@@ -1069,6 +1069,27 @@ fn single_point_nan_lane_renders_without_panic() {
     assert!(product.mono.iter().all(|s| s.is_finite()));
 }
 
+/// The multi-point sibling of the single-point case above: a multi-breakpoint
+/// lane on an unvalidated doc with `sample_rate` 0 made frame 0's time NaN
+/// (0.0/0.0), which slipped past both flat-guards and indexed off the end of
+/// the lane's segment scan. The cursor now holds the first point on a NaN
+/// sample time (infinite times already take the last-point branch).
+#[test]
+fn multi_point_lane_at_zero_sample_rate_renders_without_panic() {
+    let doc: SoundDoc = serde_json::from_str(
+        r#"{ "name": "repro", "duration": 0.05, "sample_rate": 0,
+            "root": { "type": "tracks", "tracks": [
+                { "id": "a", "node": { "type": "sine", "freq": 440 },
+                  "automation": [ { "target": "gain", "points": [
+                      { "t": 0.0, "v": 0.5 }, { "t": 0.02, "v": 1.0 } ] } ] }
+            ] } }"#,
+    )
+    .expect("repro doc parses");
+    assert!(doc.validate().is_err(), "validation rejects sample_rate 0");
+    let product = render::render_product(&doc);
+    assert!(product.mono.iter().all(|s| s.is_finite()));
+}
+
 /// Regression for a violation this suite found: `vary::mutate`'s
 /// multiplicative jitter (`v * (1 + rng.bi() * amount)`, up to ×2) overflowed
 /// f32 to ±inf for any parameter validation bounds only from BELOW (e.g.
