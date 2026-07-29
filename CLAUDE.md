@@ -99,7 +99,9 @@ renders forever.
 ## Release checklist
 
 Every release, in order (the `release` target enforces clean master + tags
-from `Cargo.toml`; CI publishes to crates.io and builds wheels on the tag):
+from `Cargo.toml`; CI publishes to crates.io and builds the tag's CLI
+binaries — the wheel pipeline is manual-only for budget reasons, see the
+Wheels workflow comment):
 
 1. Bump **both** version fields in the root `Cargo.toml` together:
    `workspace.package.version` and `workspace.dependencies.tono-core`
@@ -111,8 +113,9 @@ from `Cargo.toml`; CI publishes to crates.io and builds wheels on the tag):
    dry-run only resolves once `tono-core` X.Y.Z is on crates.io, so it runs
    after step 4, not before.
 4. `make release` (tags `vX.Y.Z`, pushes; CI publishes `tono-core` then
-   `tono`, creates the GitHub Release, and builds the tag-only wheels and
-   CLI binaries).
+   `tono`, creates the GitHub Release, and builds the tag's CLI binaries.
+   Wheels: manual-only via the Wheels workflow's `workflow_dispatch`, at
+   explicit CI cost — see its header comment.)
 
 Before the tag, the release-candidate gates: `make verify` on the pinned
 toolchain plus `stable-compat` green; `cargo doc -p tono-core --no-deps`

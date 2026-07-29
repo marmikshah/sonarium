@@ -57,7 +57,11 @@ snapshots work the same in both modes.
 
 ## Build from source
 
-Never published to PyPI (the name is taken) — build it here:
+Never published to PyPI (the name is taken), and **no prebuilt wheels for
+now**: the 3-platform wheel matrix is expensive in CI minutes, and this is a
+zero-budget project — so it's build-from-source only until users ask for
+wheels (the pipeline exists and is validated: `workflow_dispatch` on the
+Wheels workflow, or `maturin build` below).
 
 ```sh
 pip install maturin

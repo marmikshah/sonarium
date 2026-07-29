@@ -28,6 +28,11 @@ move existing work forward.
   `render_range_bars` (a slice of the full render, so tails crossing the
   boundary sound as in the full mix), and `program.render_range()` in
   Python.
+- **Python wheels are build-from-source only for now.** The 3-platform
+  wheel matrix is expensive in CI minutes, and this is a zero-budget
+  project — the pipeline stays validated but manual-only
+  (`workflow_dispatch`), and the crate README says so plainly. Prebuilt
+  wheels come back if users ask for them.
 
 ### Deferred
 - **Opus export** — evaluated for alpha.2 and deferred to the portability
