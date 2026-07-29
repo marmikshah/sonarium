@@ -30,6 +30,29 @@
   tail); it now drains the exact tail once the producer is finished.
 
 ### Added
+- **The tono C ABI (`tono-capi`)** (beta.1, issue #52): a stable `extern "C"`
+  surface for native hosts — validate a SoundDoc, load a compiled Program
+  bundle, render it to stereo, and run it through a Performance
+  (schedule/fill/metrics) behind opaque handles, with a thread-local
+  last-error string and a small JSON grammar for scheduled commands
+  (`{"play":true}` at `{"next_bar":true}`, …). Ships a hand-written `capi.h`
+  and a C smoke test; built cdylib + staticlib via `make capi`, off the
+  default build like tono-play.
+- **The WASM face (`tono-wasm`)** (beta.1, issue #52): the lean engine
+  (`tono-core` with default features off — no analysis PNGs, no SoundFont
+  sampler, which has no filesystem in a browser; sampler tracks render
+  silence as in a native lean build) compiled to `wasm32-unknown-unknown`
+  behind a `wasm-bindgen` API — `renderDoc`, `compileSong` (throws the
+  compile diagnostics as a JSON array), `Program` (hash/frames/rate/
+  streamability, stereo-interleaved `render()`, `renderStems()`,
+  `toJson`/`fromJson`), and `play() → PerformanceHandle` with
+  `schedule(commandJson, atJson)` speaking the same JSON grammar as the C
+  ABI, `fill(frames)`, `state()`, `positionBeats()`, `metricsJson()`. Ships
+  an AudioWorklet runtime (`js/tono-worklet.js` + the `js/tono.js` ES-module
+  wrapper — vanilla JS, no bundler) and a player example (`js/example.html`,
+  WAV download + live playback, not an editor). Built via `make wasm`;
+  build-gated in CI (`build-wasm` job). Live `fill` is pinned byte-identical
+  to the offline bounce by the crate's tests.
 - **`Transport` — the sample-accurate musical clock** (alpha.3,
   experimental): position in frames with exact conversions to beats and
   bars through the program's tempo/meter maps and pickup (the same shared
