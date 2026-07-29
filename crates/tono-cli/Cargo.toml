@@ -1,0 +1,39 @@
+[package]
+name = "tono"
+description = "A deterministic sound engine — synthesis, instruments, songs, and adaptive game music, rendered byte-identically to audio. Includes a CLI that renders a SoundDoc to audio + analysis images."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# cargo copies the workspace README into the package (same convention as
+# tono-core), so the crates.io page of the CLI crate isn't blank.
+readme = "../../README.md"
+keywords = ["audio", "synthesis", "dsp", "chiptune", "gamedev"]
+categories = ["multimedia::audio", "game-development"]
+# The package ships src + tests + README (and Cargo.lock) only — the showcase
+# assets (docs/, ~14 MB of example audio), the Pages site and dev tooling live
+# outside this directory, so no `exclude` list is needed. LICENSE/CHANGELOG are
+# not duplicated into the crate (the MIT SPDX field declares the license),
+# matching tono-core's packaging.
+
+[dependencies]
+# Feature-declared so a change to core's defaults can't silently unbuild this
+# crate: the CLI re-exports + uses the analysis surface and checks .sf2 paths.
+tono-core = { workspace = true, features = ["analysis", "sampler"] }
+anyhow = { workspace = true }
+flacenc = { workspace = true }
+hound = { workspace = true }
+midly = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+vorbis_rs = { workspace = true }
+# Optional: speaker playback for `tono play` (`cargo install tono --features play`).
+cpal = { workspace = true, optional = true }
+
+[features]
+play = ["dep:cpal"]
+
+[dev-dependencies]
+proptest = { workspace = true }
