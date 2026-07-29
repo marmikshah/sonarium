@@ -1,7 +1,11 @@
 //! tono — Python bindings for the deterministic tono audio engine.
 //!
-//! Two shapes over one engine, mirroring the Rust runtime:
+//! Three shapes over one engine, mirroring the Rust crates:
 //!
+//! * **typed songs** (experimental, ADR 0004) — `Song` / `Pattern` / `Track` /
+//!   `Program` plus the `instruments` catalog, wrapping the native Rust model
+//!   directly: no JSON in the authoring path, and an equivalent song compiles
+//!   to the same Program hash from either language.
 //! * **numpy pull** — [`render`] a `SoundDoc` JSON or [`Patch::render`] a
 //!   parameterized patch straight to an `np.ndarray`. Deterministic, so it is
 //!   testable in CI and drops into any audio callback, a WAV bounce, or a
@@ -11,7 +15,9 @@
 //!   `set_intensity`, `trigger`) while the audio thread stays GIL-free.
 //!
 //! `SoundDoc`s and `Patch`es cross the boundary as JSON strings — the same serde
-//! types the CLI and desktop studio use.
+//! types the CLI and desktop studio use. The compiled extension is `tono._tono`;
+//! the `tono` package (see `python/tono/`) re-exports this surface and ships the
+//! type stubs.
 
 use std::collections::BTreeMap;
 
@@ -22,6 +28,7 @@ use pyo3::prelude::*;
 use tono_core::dsl::SoundDoc;
 use tono_core::patch::Patch as CorePatch;
 
+mod song;
 mod stream;
 
 /// Parse a `SoundDoc` from JSON, mapping serde/validation failures to a Python
@@ -63,7 +70,7 @@ fn render<'py>(py: Python<'py>, doc_json: &str) -> PyResult<Bound<'py, PyArray1<
 /// p = tono.Patch(open("impact.patch.json").read())
 /// buf = p.render(hardness=0.7, size=0.3)   # -> np.float32 ndarray
 /// ```
-#[pyclass]
+#[pyclass(module = "tono")]
 struct Patch {
     inner: CorePatch,
 }
@@ -102,11 +109,13 @@ impl Patch {
     }
 }
 
-/// The `tono` Python module.
+/// The `tono._tono` native extension — the `tono` package (`python/tono/`)
+/// re-exports this surface next to the stubs.
 #[pymodule]
-fn tono(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _tono(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(render, m)?)?;
     m.add_class::<Patch>()?;
     stream::register(m)?;
+    song::register(m)?;
     Ok(())
 }

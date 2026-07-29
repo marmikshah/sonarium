@@ -22,5 +22,8 @@ dependencies = ["numpy>=1.21"]
 Repository = "https://github.com/marmikshah/tono"
 
 [tool.maturin]
-# abi3 wheels; the extension module is named `tono`.
+# abi3 wheels; the extension module is `tono._tono` inside the `tono` package
+# (python/ ships the package glue, the py.typed marker, and the stubs).
+python-source = "python"
+module-name = "tono._tono"
 features = ["pyo3/extension-module"]

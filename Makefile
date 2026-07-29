@@ -39,14 +39,16 @@ python: ## Build the Python extension into the active venv (maturin develop) —
 wheel: ## Build a release abi3 wheel for the Python bindings → target/wheels/
 	maturin build --release -m crates/tono-py/Cargo.toml
 
-python-test: ## Run the Python determinism smoke test (build the extension first: make python)
+python-test: ## Run the Python determinism + typed-API tests (build the extension first: make python)
 	python3 crates/tono-py/tests/smoke.py
+	python3 crates/tono-py/tests/test_typed.py
 
-python-smoke: ## Build the extension as a wheel, install it, run the smoke test (what the Python workflow runs)
+python-smoke: ## Build the extension as a wheel, install it, run the smoke + typed-API tests (what the Python workflow runs)
 	python3 -m pip install --upgrade pip maturin numpy
 	maturin build --out dist -m crates/tono-py/Cargo.toml
 	python3 -m pip install --no-index --find-links dist --force-reinstall --no-deps tono
 	python3 crates/tono-py/tests/smoke.py
+	python3 crates/tono-py/tests/test_typed.py
 
 test: ## Run the test suite
 	cargo test

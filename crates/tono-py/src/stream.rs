@@ -121,7 +121,7 @@ fn run_stream(
 
 /// A live audio engine that owns an output stream. Load instruments, a drum kit,
 /// SFX patches, and an adaptive-music bed, then drive them from the game loop.
-#[pyclass]
+#[pyclass(module = "tono")]
 struct Engine {
     shared: Shared,
     /// The shared SFX sub-engine inside the mix — patch triggers play here.
@@ -283,7 +283,7 @@ impl Drop for Engine {
 }
 
 /// A playable instrument voice in the mix.
-#[pyclass]
+#[pyclass(module = "tono")]
 struct Instrument {
     shared: Shared,
     id: SourceId,
@@ -327,7 +327,7 @@ impl Instrument {
 }
 
 /// A General MIDI drum kit in the mix.
-#[pyclass]
+#[pyclass(module = "tono")]
 struct DrumKit {
     shared: Shared,
     id: SourceId,
@@ -347,7 +347,7 @@ impl DrumKit {
 }
 
 /// An adaptive-music bed: intensity-driven stems plus one-shot stingers.
-#[pyclass]
+#[pyclass(module = "tono")]
 struct AdaptiveMusic {
     shared: Shared,
     id: SourceId,
@@ -390,7 +390,7 @@ impl AdaptiveMusic {
 }
 
 /// A loaded SFX patch: trigger one-shot instances with per-trigger parameters.
-#[pyclass]
+#[pyclass(module = "tono")]
 struct PatchVoice {
     shared: Shared,
     sfx: SourceId,
