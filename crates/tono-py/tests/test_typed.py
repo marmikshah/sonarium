@@ -24,7 +24,7 @@ import tono
 
 # The cross-language pin — crates/tono-core/tests/equivalence.rs asserts the
 # same value. If this changes, change both or the languages disagree.
-REFERENCE_HASH = 0x0C866480DB6D4D71
+REFERENCE_HASH = 0x5C8AD081AED2AAFE
 
 
 def reference_program() -> "tono.Program":

@@ -18,8 +18,8 @@ pub(crate) use seq::seq_to_signal;
 use crate::dsl::{Adsr, Node, Playback, Shape, SoundDoc, Value};
 use crate::dsp::{Rng, node_path, node_seed, peak_limit};
 use effects::{
-    ConvolveSpec, GranularSpec, biquad, chorus, compress, convolve, drive_adaa, flanger, granular,
-    modal_bank, phaser, reverb,
+    CompressSpec, ConvolveSpec, GranularSpec, biquad, chorus, compress, convolve, drive_adaa,
+    flanger, granular, modal_bank, phaser, reverb,
 };
 use osc::{
     dust_signal, fm_signal, impact_signal, noise_signal, osc_signal, saw_signal, square_signal,
@@ -116,11 +116,11 @@ fn render_plain(doc: &SoundDoc) -> Signal {
         crossfade_secs,
     } = doc.playback
     {
-        out = make_loop_buffer(&out, sr, start_secs, end_secs, crossfade_secs);
+        out = make_loop_buffer(&out, sr, start_secs, end_secs, crossfade_secs, engine);
     }
     match &doc.normalize {
         // Loudness-matched / true-peak-limited output stage (opt-in).
-        Some(nz) if engine >= 4 => normalize_output_v4(&mut [&mut out], nz, sr),
+        Some(nz) if engine >= 4 => normalize_output_v4(&mut [&mut out], nz, sr, engine),
         Some(nz) => normalize_output(&mut out, nz),
         // Default: a transparent sample-peak safety limit only.
         None => peak_limit(&mut [&mut out]),
@@ -132,9 +132,10 @@ fn render_plain(doc: &SoundDoc) -> Signal {
 /// [`crate::streaming::value::Val`] is the single definition of every
 /// modulator's math — this is just a loop over it, so the offline and
 /// streaming paths can never diverge (the streaming byte-identity fuzz proves
-/// the loop reproduces the closed forms).
-fn eval_value(v: &Value, n: usize, sr: u32) -> Vec<f32> {
-    let mut val = crate::streaming::value::Val::build(v, sr, n);
+/// the loop reproduces the closed forms). `engine` dispatches the
+/// modulators' transcendentals (ADR 0001).
+fn eval_value(v: &Value, n: usize, sr: u32, engine: u32) -> Vec<f32> {
+    let mut val = crate::streaming::value::Val::build(v, sr, n, engine);
     (0..n).map(|t| val.eval(t)).collect()
 }
 
@@ -155,16 +156,16 @@ pub(crate) fn rand_seed(seed: u64, from: f32, to: f32, rate: f32) -> u64 {
 /// byte-identical.
 fn render_node(node: &Node, n: usize, sr: u32, rng: &mut Rng, engine: u32, path: u64) -> Signal {
     match node {
-        Node::Square { freq, duty } => square_signal(freq, duty, n, sr),
-        Node::Triangle { freq } => tri_signal(freq, n, sr),
-        Node::Sawtooth { freq } => saw_signal(freq, n, sr),
+        Node::Square { freq, duty } => square_signal(freq, duty, n, sr, engine),
+        Node::Triangle { freq } => tri_signal(freq, n, sr, engine),
+        Node::Sawtooth { freq } => saw_signal(freq, n, sr, engine),
         Node::Super {
             wave,
             freq,
             voices,
             detune_cents,
-        } => super_signal(*wave, freq, *voices, *detune_cents, n, sr),
-        Node::Sine { freq } => osc_signal(freq, n, sr, |p| osc(Shape::Sine, p)),
+        } => super_signal(*wave, freq, *voices, *detune_cents, n, sr, engine),
+        Node::Sine { freq } => osc_signal(freq, n, sr, engine, |p| osc(Shape::Sine, p, engine)),
         Node::Noise { color } => {
             // Engine ≥ 2: each noise leaf owns a structurally-seeded stream (from
             // its graph position), so its randomness is independent of traversal
@@ -176,12 +177,12 @@ fn render_node(node: &Node, n: usize, sr: u32, rng: &mut Rng, engine: u32, path:
                 noise_signal(*color, n, rng)
             }
         }
-        Node::Fm { freq, ratio, index } => fm_signal(freq, *ratio, index, n, sr),
+        Node::Fm { freq, ratio, index } => fm_signal(freq, *ratio, index, n, sr, engine),
         Node::Wavetable {
             wave,
             freq,
             position,
-        } => wavetable_signal(*wave, freq, position, n, sr),
+        } => wavetable_signal(*wave, freq, position, n, sr, engine),
         // Engine ≥ 2: the seq draws its voice randomness (noise/pluck/kit/thump)
         // from a structurally-seeded stream, so it's order-independent and the
         // streaming renderer reproduces it byte-identically.
@@ -193,13 +194,13 @@ fn render_node(node: &Node, n: usize, sr: u32, rng: &mut Rng, engine: u32, path:
                 seq_to_signal(node, n, sr, rng, engine)
             }
         }
-        Node::Impact { hardness, velocity } => impact_signal(*hardness, *velocity, n, sr),
+        Node::Impact { hardness, velocity } => impact_signal(*hardness, *velocity, n, sr, engine),
         Node::Dust { density, decay } => {
             if engine >= 2 {
                 let mut local = Rng::new(node_seed(path));
-                dust_signal(*density, *decay, n, sr, &mut local)
+                dust_signal(*density, *decay, n, sr, &mut local, engine)
             } else {
-                dust_signal(*density, *decay, n, sr, rng)
+                dust_signal(*density, *decay, n, sr, rng, engine)
             }
         }
         Node::Env { adsr: env } => adsr(env, n, sr),
@@ -278,8 +279,8 @@ fn apply_processor(
             // gain dip on the chained signal — the sidechain pump.
             let trig = render_node(trigger, input.len(), sr, rng, engine, node_path(path, 0));
             let srf = sr as f32;
-            let at = (-1.0 / (attack.max(1e-4) * srf)).exp();
-            let rt = (-1.0 / (release.max(1e-4) * srf)).exp();
+            let at = crate::dsp::exp(-1.0 / (attack.max(1e-4) * srf), engine);
+            let rt = crate::dsp::exp(-1.0 / (release.max(1e-4) * srf), engine);
             let mut env = 0.0f32;
             input
                 .iter()
@@ -292,21 +293,31 @@ fn apply_processor(
                 })
                 .collect()
         }
-        Node::Lowpass { cutoff, q } => biquad(input, cutoff, *q, sr, FilterKind::Low),
-        Node::Highpass { cutoff, q } => biquad(input, cutoff, *q, sr, FilterKind::High),
-        Node::Bandpass { cutoff, q } => biquad(input, cutoff, *q, sr, FilterKind::Band),
-        Node::Notch { cutoff, q } => biquad(input, cutoff, *q, sr, FilterKind::Notch),
+        Node::Lowpass { cutoff, q } => biquad(input, cutoff, *q, sr, FilterKind::Low, engine),
+        Node::Highpass { cutoff, q } => biquad(input, cutoff, *q, sr, FilterKind::High, engine),
+        Node::Bandpass { cutoff, q } => biquad(input, cutoff, *q, sr, FilterKind::Band, engine),
+        Node::Notch { cutoff, q } => biquad(input, cutoff, *q, sr, FilterKind::Notch, engine),
         Node::Peak { cutoff, q, gain_db } => {
-            biquad(input, cutoff, *q, sr, FilterKind::Peak(*gain_db))
+            biquad(input, cutoff, *q, sr, FilterKind::Peak(*gain_db), engine)
         }
-        Node::Lowshelf { cutoff, gain_db } => {
-            biquad(input, cutoff, 0.707, sr, FilterKind::LowShelf(*gain_db))
-        }
-        Node::Highshelf { cutoff, gain_db } => {
-            biquad(input, cutoff, 0.707, sr, FilterKind::HighShelf(*gain_db))
-        }
+        Node::Lowshelf { cutoff, gain_db } => biquad(
+            input,
+            cutoff,
+            0.707,
+            sr,
+            FilterKind::LowShelf(*gain_db),
+            engine,
+        ),
+        Node::Highshelf { cutoff, gain_db } => biquad(
+            input,
+            cutoff,
+            0.707,
+            sr,
+            FilterKind::HighShelf(*gain_db),
+            engine,
+        ),
         Node::Gain { amount } => {
-            let g = eval_value(amount, input.len(), sr);
+            let g = eval_value(amount, input.len(), sr, engine);
             input.iter().zip(g).map(|(x, k)| x * k).collect()
         }
         Node::Bitcrush { bits } => {
@@ -348,30 +359,30 @@ fn apply_processor(
             out
         }
         Node::Reverb { room, mix } => reverb(input, *room, *mix, sr, 0),
-        Node::Modal { modes, mix } => modal_bank(input, modes, *mix, sr),
+        Node::Modal { modes, mix } => modal_bank(input, modes, *mix, sr, engine),
         Node::Drive { amount, shape, aa } => {
-            let a = eval_value(amount, input.len(), sr);
+            let a = eval_value(amount, input.len(), sr, engine);
             // ADAA is an engine-1 kernel: gated on the document's engine so
             // legacy (engine-0) documents render the original aliasing curve
             // byte-for-byte. Within engine 1 it is on unless `aa: false`.
             let use_adaa = engine >= 1 && aa.unwrap_or(true);
             if use_adaa {
-                drive_adaa(input, &a, *shape)
+                drive_adaa(input, &a, *shape, engine)
             } else {
                 input
                     .iter()
                     .zip(a)
-                    .map(|(x, amt)| drive_curve(amt.max(0.0) * x, *shape))
+                    .map(|(x, amt)| drive_curve(amt.max(0.0) * x, *shape, engine))
                     .collect()
             }
         }
         Node::RingMod { freq } => {
-            let f = eval_value(freq, input.len(), sr);
+            let f = eval_value(freq, input.len(), sr, engine);
             let srf = sr as f32;
             let mut phase = 0.0f32;
             let mut out = Vec::with_capacity(input.len());
             for (i, &x) in input.iter().enumerate() {
-                out.push(x * (TAU * phase).sin());
+                out.push(x * crate::dsp::sin(TAU * phase, engine));
                 phase += f[i].max(0.0) / srf;
                 phase -= phase.floor();
             }
@@ -387,30 +398,43 @@ fn apply_processor(
                 .iter()
                 .enumerate()
                 .map(|(i, &x)| {
-                    x * (1.0 - *depth * (0.5 + 0.5 * (TAU * *rate * i as f32 / srf).sin()))
+                    x * (1.0
+                        - *depth
+                            * (0.5 + 0.5 * crate::dsp::sin(TAU * *rate * i as f32 / srf, engine)))
                 })
                 .collect()
         }
-        Node::Chorus { rate, depth, mix } => chorus(input, *rate, *depth, *mix, sr),
+        Node::Chorus { rate, depth, mix } => chorus(input, *rate, *depth, *mix, sr, engine),
         Node::Flanger {
             rate,
             depth,
             feedback,
             mix,
-        } => flanger(input, *rate, *depth, *feedback, *mix, sr),
+        } => flanger(input, *rate, *depth, *feedback, *mix, sr, engine),
         Node::Phaser {
             rate,
             depth,
             feedback,
             mix,
-        } => phaser(input, *rate, *depth, *feedback, *mix, sr),
+        } => phaser(input, *rate, *depth, *feedback, *mix, sr, engine),
         Node::Compress {
             threshold,
             ratio,
             attack,
             release,
             makeup,
-        } => compress(input, *threshold, *ratio, *attack, *release, *makeup, sr),
+        } => compress(
+            input,
+            CompressSpec {
+                threshold: *threshold,
+                ratio: *ratio,
+                attack: *attack,
+                release: *release,
+                makeup: *makeup,
+            },
+            sr,
+            engine,
+        ),
         Node::Convolve {
             decay,
             size,
@@ -431,6 +455,7 @@ fn apply_processor(
                 },
                 sr,
                 node_seed(path),
+                engine,
             )
         }
         Node::Granular {
@@ -453,6 +478,7 @@ fn apply_processor(
                 },
                 sr,
                 node_seed(path),
+                engine,
             )
         }
         // Every processor variant is matched above; this fires only if a new

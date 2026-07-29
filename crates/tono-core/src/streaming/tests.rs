@@ -857,6 +857,119 @@ fn new_melodic_waves_stream_byte_identically() {
     }
 }
 
+// ---- engine 5: the deterministic transcendentals (ADR 0001) ----
+
+#[test]
+fn engine5_seq_streams_byte_identically() {
+    // The libm-heavy voices — the FM strike, the inharmonic piano's partials
+    // (powf/exp/sin per partial), the 808 kit — must stream through the det
+    // kernels byte-identically to the offline render at every block size.
+    for doc in [
+        r#"{ "name":"e5fm", "duration":0.6, "seed":7, "version":2, "engine":5,
+            "root": { "type":"seq", "bpm":132, "steps_per_beat":4, "wave":"fm",
+              "fm_ratio":3.01, "fm_index":4.5, "fm_strike":0.09,
+              "env": { "a":0.002, "d":0.06, "s":0.5, "r":0.08 },
+              "notes": [ { "step":0, "len":2, "pitch":"C4" },
+                         { "step":2, "len":2, "pitch":"Eb4", "gain":0.8 },
+                         { "step":4, "len":2, "pitch":"G4" },
+                         { "step":6, "len":2, "pitch":"midi:71", "gain":0.7 } ] } }"#,
+        r#"{ "name":"e5pno", "duration":0.8, "seed":8, "version":2, "engine":5,
+            "root": { "type":"seq", "bpm":100, "steps_per_beat":4, "wave":"piano",
+              "env": { "a":0.002, "s":1.0, "r":0.2 },
+              "notes": [ { "step":0, "len":4, "pitch":"A2" },
+                         { "step":4, "len":4, "pitch":"C4", "gain":0.85 },
+                         { "step":8, "len":4, "pitch":"E4" } ] } }"#,
+        r#"{ "name":"e5kit", "duration":0.6, "seed":5, "version":2, "engine":5,
+            "root": { "type":"seq", "bpm":120, "steps_per_beat":4, "wave":"kit", "kit":"808",
+              "env": { "a":0.001, "d":0.1, "s":0.4, "r":0.06 },
+              "notes": [ { "step":0, "len":1, "pitch":"midi:36" },
+                         { "step":2, "len":1, "pitch":"midi:38", "gain":0.9 },
+                         { "step":4, "len":1, "pitch":"midi:42", "gain":0.6 },
+                         { "step":6, "len":1, "pitch":"midi:49", "gain":0.8 } ] } }"#,
+    ] {
+        assert_byte_identical(&parse(doc));
+    }
+}
+
+#[test]
+fn engine5_effects_stream_byte_identically() {
+    // Waveshaping (ADAA tanh), dynamics (log10/powf per sample), the
+    // modulated-delay LFOs, and a biquad — the libm-heavy processors, plus a
+    // slide-exp modulator (det powf) on the source frequency.
+    assert_byte_identical(&parse(
+        r#"{ "name":"e5fx", "duration":0.3, "seed":3, "version":2, "engine":5,
+            "root": { "type":"chain", "stages": [
+                { "type":"sawtooth", "freq": { "slide": { "from":110, "to":220, "secs":0.25, "curve":"exp" } } },
+                { "type":"lowpass", "cutoff":1400, "q":0.9 },
+                { "type":"drive", "amount":4, "shape":"tanh" },
+                { "type":"chorus", "rate":1.2, "depth":0.6, "mix":0.4 },
+                { "type":"compress", "threshold":-16, "ratio":3, "attack":0.004, "release":0.07, "makeup":2 } ] } }"#,
+    ));
+    // FM through ringmod/tremolo and the swept-delay pair (per-sample sines).
+    assert_byte_identical(&parse(
+        r#"{ "name":"e5tr", "duration":0.2, "seed":2, "version":2, "engine":5,
+            "root": { "type":"chain", "stages": [
+                { "type":"fm", "freq":330, "ratio":2.0, "index":2.5 },
+                { "type":"ringmod", "freq":7 },
+                { "type":"tremolo", "rate":5.5, "depth":0.7 },
+                { "type":"flanger", "rate":0.7, "depth":0.6, "feedback":0.4, "mix":0.5 },
+                { "type":"phaser", "rate":0.4, "depth":0.7, "feedback":0.3, "mix":0.6 } ] } }"#,
+    ));
+}
+
+#[test]
+fn engine5_tracks_stream_byte_identically() {
+    // The whole console at engine 5: exp automation lanes (det powf on the
+    // lane cursor), a sidechain (det exp on the follower), a bus with a
+    // reverb, and a master compressor — plus the equal-power pan law.
+    assert_tracks_byte_identical(&parse(
+        r#"{ "name":"e5mix", "duration":0.8, "seed":6, "version":2, "engine":5,
+            "root": { "type":"tracks",
+              "buses": [ { "id":"verb", "gain":0.8, "effects": [ { "type":"reverb", "room":0.5, "mix":0.4 } ] } ],
+              "tracks": [
+                { "id":"keys", "node": { "type":"seq", "bpm":120, "steps_per_beat":4, "wave":"epiano",
+                    "env": { "a":0.003, "d":0.1, "s":0.5, "r":0.1 },
+                    "notes": [ { "step":0, "len":4, "pitch":"C4" },
+                               { "step":4, "len":4, "pitch":"G3", "gain":0.8 } ] },
+                  "gain":0.7, "pan":-0.3,
+                  "automation": [ { "target":"gain", "curve":"exp", "points": [
+                      { "t":0.0, "v":0.3 }, { "t":0.7, "v":0.9 } ] } ],
+                  "sends": [ { "bus":"verb", "amount":0.4 } ] },
+                { "id":"bass", "node": { "type":"seq", "bpm":120, "steps_per_beat":4, "wave":"bass",
+                    "env": { "a":0.004, "d":0.06, "s":0.8, "r":0.06 },
+                    "notes": [ { "step":0, "len":8, "pitch":"C2" } ] },
+                  "gain":0.6, "at":0.05, "pan":0.2,
+                  "sidechain": { "source":"keys", "amount":0.6, "attack":0.005, "release":0.12 } }
+              ],
+              "master": [ { "type":"compress", "threshold":-14, "ratio":2.5,
+                            "attack":0.005, "release":0.08, "makeup":1.5 } ] } }"#,
+    ));
+}
+
+#[test]
+fn engine5_render_is_bit_deterministic_in_process() {
+    // Twice in one process, identical bits. The cross-platform half of the
+    // promise holds by construction: every transcendental in this render goes
+    // through crate::det (the f32 wrappers and the f64 gated-loudness path),
+    // and the convolve runs the fixed-order det FFT — no platform libm
+    // remains in the engine-5 path. The CI two-platform run is the real
+    // proof; this pins the per-process determinism plus the output stage.
+    let doc = parse(
+        r#"{ "name":"e5all", "duration":0.5, "seed":9, "version":2, "engine":5,
+            "normalize": { "target_lufs": -16, "ceiling_dbtp": -1.0 },
+            "root": { "type":"chain", "stages": [
+                { "type":"mul", "inputs": [
+                    { "type":"fm", "freq":"A3", "ratio":2.5, "index":3 },
+                    { "type":"env", "a":0.005, "d":0.1, "s":0.4, "r":0.1 } ] },
+                { "type":"convolve", "decay":0.2, "predelay":0.005, "damp":0.4, "mix":0.35 },
+                { "type":"granular", "grain_ms":40, "density":30, "pitch":1.5, "spread":0.25, "mix":0.4 } ] } }"#,
+    );
+    doc.validate().unwrap();
+    let a = crate::render::render_product(&doc);
+    let b = crate::render::render_product(&doc);
+    assert_eq!(bits(&a.mono), bits(&b.mono));
+}
+
 #[test]
 fn engine1_noise_falls_back_but_engine2_streams() {
     // engine < 2 keeps the shared stream ⇒ not streamable (buffer fallback).
@@ -1071,4 +1184,70 @@ fn multiple_blockers_all_report_once() {
             StreamBlocker::LegacyRng { engine: 1 },
         ]
     );
+}
+
+#[test]
+fn engine5_tracks_engine4_output_within_float_noise() {
+    // Engine 5 is a DETERMINISM revision, not a quality revision: the det
+    // kernels are ~1 ulp accurate against libm, so the same document at
+    // engine 4 (platform libm) and engine 5 (det kernels) must render within
+    // float rounding of each other — a wrapper miswired to the wrong kernel
+    // (or a botched FFT) would blow far past these bounds.
+    //
+    // Two profiles: the fm-fx chain carries an ADAA drive, whose divided
+    // difference (F(x1) − F(x0)) / (x1 − x0) legitimately amplifies ulp-level
+    // input noise by up to ~1/eps on samples near the epsilon fallback, so
+    // its MAX bound is loose and the tight check is on the rms; the convolve
+    // chain has no such amplifier and stays tight end to end.
+    for (name, root, max_bound, rms_bound) in [
+        (
+            "fm-fx",
+            r#"{ "type":"chain", "stages": [
+                { "type":"mul", "inputs": [
+                    { "type":"fm", "freq":"A4", "ratio":3.5,
+                      "index": { "slide": { "from":5, "to":0.5, "secs":0.3 } } },
+                    { "type":"env", "a":0.003, "d":0.08, "s":0.3, "r":0.06 } ] },
+                { "type":"drive", "amount":3, "shape":"tanh" },
+                { "type":"chorus", "rate":1.5, "depth":0.5, "mix":0.35 },
+                { "type":"compress", "threshold":-15, "ratio":3,
+                  "attack":0.004, "release":0.06, "makeup":2 } ] }"#,
+            1e-2,
+            1e-4,
+        ),
+        (
+            "convolve",
+            r#"{ "type":"chain", "stages": [
+                { "type":"mul", "inputs": [
+                    { "type":"noise", "color":"white" },
+                    { "type":"env", "a":0.001, "d":0.03, "s":0.0, "r":0.01 } ] },
+                { "type":"convolve", "decay":0.2, "predelay":0.008, "damp":0.5, "mix":0.5 } ] }"#,
+            1e-4,
+            1e-6,
+        ),
+    ] {
+        let render = |engine: u32| {
+            let d = parse(&format!(
+                r#"{{ "name":"cmp", "duration":0.4, "seed":7, "version":2, "engine":{engine},
+                    "root": {root} }}"#
+            ));
+            crate::render::render(&d)
+        };
+        let (a, b) = (render(4), render(5));
+        let max = a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, f32::max);
+        let rms = (a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| (x - y) * (x - y))
+            .sum::<f32>()
+            / a.len() as f32)
+            .sqrt();
+        assert!(
+            max < max_bound && rms < rms_bound,
+            "{name}: engine 4 vs 5 diverged (max {max:.2e}, rms {rms:.2e}) — a wrapper is miswired"
+        );
+    }
 }

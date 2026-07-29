@@ -106,10 +106,12 @@ impl Src {
     /// `pitch` is a live multiplier applied to every oscillator frequency (1.0 =
     /// as authored) — it drives pitch bend and glide without rebuilding the graph.
     /// At `pitch == 1.0` the arithmetic is bit-identical to the offline render.
-    pub(super) fn step(&mut self, t: usize, pitch: f32) -> f32 {
+    /// `engine` is the document's kernel revision, dispatched into the
+    /// transcendentals (ADR 0001).
+    pub(super) fn step(&mut self, t: usize, pitch: f32, engine: u32) -> f32 {
         match self {
             Src::Sine { phase, freq, srf } => {
-                let v = osc(Shape::Sine, *phase);
+                let v = osc(Shape::Sine, *phase, engine);
                 *phase += freq.eval(t).max(0.0) * pitch / *srf;
                 *phase -= phase.floor();
                 v
@@ -160,8 +162,8 @@ impl Src {
                 ratio,
                 srf,
             } => {
-                let m = index.eval(t) * (TAU * *mph).sin();
-                let y = (TAU * *cph + m).sin();
+                let m = index.eval(t) * crate::dsp::sin(TAU * *mph, engine);
+                let y = crate::dsp::sin(TAU * *cph + m, engine);
                 let fi = freq.eval(t).max(0.0) * pitch;
                 *cph += fi / *srf;
                 *cph -= cph.floor();
@@ -211,7 +213,7 @@ impl Src {
             Src::Impact { w, norm } => {
                 if t < *w {
                     let phase = (t as f32 + 0.5) / *w as f32;
-                    *norm * 0.5 * (1.0 - (TAU * phase).cos())
+                    *norm * 0.5 * (1.0 - crate::dsp::cos(TAU * phase, engine))
                 } else {
                     0.0
                 }
@@ -253,21 +255,21 @@ impl Src {
             Src::Mix(cs) => {
                 let mut acc = 0.0f32;
                 for c in cs.iter_mut() {
-                    acc += c.step(t, pitch);
+                    acc += c.step(t, pitch, engine);
                 }
                 acc
             }
             Src::Mul(cs) => {
                 let mut acc = 1.0f32;
                 for c in cs.iter_mut() {
-                    acc *= c.step(t, pitch);
+                    acc *= c.step(t, pitch, engine);
                 }
                 acc
             }
             Src::Chain { src, procs } => {
-                let mut x = src.step(t, pitch);
+                let mut x = src.step(t, pitch, engine);
                 for p in procs.iter_mut() {
-                    x = p.step(x, t, pitch);
+                    x = p.step(x, t, pitch, engine);
                 }
                 x
             }
@@ -290,7 +292,7 @@ impl Src {
 
 pub(super) fn try_src(node: &Node, sr: u32, n: usize, engine: u32, path: u64) -> Option<Src> {
     let srf = sr as f32;
-    let v = |val: &Value| Val::build(val, sr, n);
+    let v = |val: &Value| Val::build(val, sr, n, engine);
     Some(match node {
         // Engine >= 2: noise/dust own a structurally-seeded RNG (from `path`),
         // exactly as the offline render_node does under engine >= 2, so the
@@ -306,7 +308,7 @@ pub(super) fn try_src(node: &Node, sr: u32, n: usize, engine: u32, path: u64) ->
         Node::Dust { density, decay } if engine >= 2 => {
             let p = (density / srf).clamp(0.0, 1.0);
             let g = if *decay > 0.0 {
-                (-1.0 / (decay * srf)).exp()
+                crate::dsp::exp(-1.0 / (decay * srf), engine)
             } else {
                 0.0
             };
@@ -369,7 +371,7 @@ pub(super) fn try_src(node: &Node, sr: u32, n: usize, engine: u32, path: u64) ->
                 } else {
                     -detune_cents + 2.0 * detune_cents * (k as f32 / (count as f32 - 1.0))
                 };
-                ratios.push(2f32.powf(cents / 1200.0));
+                ratios.push(crate::dsp::powf(2.0, cents / 1200.0, engine));
             }
             Src::Super {
                 wave: *wave,
@@ -385,7 +387,7 @@ pub(super) fn try_src(node: &Node, sr: u32, n: usize, engine: u32, path: u64) ->
             freq,
             position,
         } => Src::Wavetable {
-            frames: wavetable_frames(*wave),
+            frames: wavetable_frames(*wave, engine),
             phase: 0.0,
             freq: v(freq),
             position: v(position),

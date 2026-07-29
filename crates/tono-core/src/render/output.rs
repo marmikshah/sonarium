@@ -4,7 +4,8 @@
 use super::Signal;
 use crate::dsl::{Normalize, Stereo};
 use crate::dsp::{
-    db_to_lin, loudness_lufs, loudness_lufs_gated, peak_limit, true_peak, true_peak_oversampled,
+    db_to_lin, db_to_lin_e, loudness_lufs, loudness_lufs_gated_e, peak_limit, true_peak,
+    true_peak_oversampled,
 };
 use std::f32::consts::FRAC_PI_2;
 
@@ -16,13 +17,15 @@ use std::f32::consts::FRAC_PI_2;
 /// `r[0..L-x]` with its first `x` samples replaced by a sin/cos blend of the
 /// head (`r[i]`, fading in) and the tail (`r[L-x+i]`, fading out). The wrap
 /// `out[last] → out[0]` then lands on adjacent original samples, so there is no
-/// discontinuity.
+/// discontinuity. `engine` dispatches the crossfade's sin/cos — engine ≥ 5
+/// blends through the deterministic kernels (ADR 0001).
 pub fn make_loop_buffer(
     samples: &[f32],
     sr: u32,
     start_secs: f32,
     end_secs: Option<f32>,
     crossfade_secs: f32,
+    engine: u32,
 ) -> Signal {
     let len = samples.len();
     let s = ((start_secs * sr as f32) as usize).min(len);
@@ -43,8 +46,8 @@ pub fn make_loop_buffer(
     let mut out = region[..out_len].to_vec();
     for (i, o) in out.iter_mut().take(x).enumerate() {
         let t = (i as f32 + 0.5) / x as f32;
-        let fade_in = (FRAC_PI_2 * t).sin();
-        let fade_out = (FRAC_PI_2 * t).cos();
+        let fade_in = crate::dsp::sin(FRAC_PI_2 * t, engine);
+        let fade_out = crate::dsp::cos(FRAC_PI_2 * t, engine);
         *o = region[i] * fade_in + region[out_len + i] * fade_out;
     }
     out
@@ -65,7 +68,8 @@ pub fn loop_seam_db(samples: &[f32]) -> f32 {
 /// attenuation, the soft-knee limiter only compresses the peaks, so dense /
 /// peaky material (a BGM mix, layered impacts) actually REACHES the loudness
 /// target instead of being dragged back down. Two measure→gain→limit passes
-/// converge within ~1 dB.
+/// converge within ~1 dB. LEGACY (engine ≤ 3): pinned to platform libm
+/// forever — engine ≥ 4 documents route to [`normalize_output_v4`].
 pub(super) fn normalize_output(samples: &mut [f32], nz: &Normalize) {
     let ceil = db_to_lin(nz.ceiling_dbtp);
     if let Some(target) = nz.target_lufs {
@@ -78,7 +82,9 @@ pub(super) fn normalize_output(samples: &mut [f32], nz: &Normalize) {
             for x in samples.iter_mut() {
                 *x *= g;
             }
-            soft_limit(samples, ceil);
+            // Engine ≤ 3 only (the caller gates), so the limiter stays on
+            // platform libm — bit-exact with every historical render.
+            soft_limit(samples, ceil, 0);
         }
     }
     // Safety: catch inter-sample residue above the ceiling, then sample peak.
@@ -92,23 +98,29 @@ pub(super) fn normalize_output(samples: &mut [f32], nz: &Normalize) {
 /// asymmetric mix toward center), and the ceiling is enforced against a real
 /// oversampled true-peak estimate (the legacy linear estimate could never see
 /// an inter-sample over, so the documented dBTP ceiling was not honored).
-pub(super) fn normalize_output_v4(channels: &mut [&mut [f32]], nz: &Normalize, sr: u32) {
-    let ceil = db_to_lin(nz.ceiling_dbtp);
+/// `engine` dispatches the measurement's transcendentals (ADR 0001).
+pub(super) fn normalize_output_v4(
+    channels: &mut [&mut [f32]],
+    nz: &Normalize,
+    sr: u32,
+    engine: u32,
+) {
+    let ceil = db_to_lin_e(nz.ceiling_dbtp, engine);
     if let Some(target) = nz.target_lufs {
         for _ in 0..2 {
             let cur = {
                 let views: Vec<&[f32]> = channels.iter().map(|c| &**c).collect();
-                loudness_lufs_gated(&views, sr)
+                loudness_lufs_gated_e(&views, sr, engine)
             };
             if cur <= -120.0 {
                 break;
             }
-            let g = db_to_lin(target - cur);
+            let g = db_to_lin_e(target - cur, engine);
             for c in channels.iter_mut() {
                 for x in c.iter_mut() {
                     *x *= g;
                 }
-                soft_limit(c, ceil);
+                soft_limit(c, ceil, engine);
             }
         }
     }
@@ -130,7 +142,8 @@ pub(super) fn normalize_output_v4(channels: &mut [&mut [f32]], nz: &Normalize, s
 
 /// Soft-knee peak limiter: transparent below `0.7 × ceil`, smoothly (tanh)
 /// compressed above, never exceeding `ceil`. C1-continuous at the knee.
-fn soft_limit(samples: &mut [f32], ceil: f32) {
+/// `engine` dispatches the tanh (ADR 0001).
+fn soft_limit(samples: &mut [f32], ceil: f32, engine: u32) {
     const KNEE: f32 = 0.7;
     // A degenerate ceiling must not turn the mix into inf/NaN.
     let ceil = ceil.max(1e-9);
@@ -138,7 +151,8 @@ fn soft_limit(samples: &mut [f32], ceil: f32) {
         let v = *x / ceil;
         let a = v.abs();
         if a > KNEE {
-            let compressed = KNEE + (1.0 - KNEE) * ((a - KNEE) / (1.0 - KNEE)).tanh();
+            let compressed =
+                KNEE + (1.0 - KNEE) * crate::dsp::tanh((a - KNEE) / (1.0 - KNEE), engine);
             *x = v.signum() * compressed * ceil;
         }
     }

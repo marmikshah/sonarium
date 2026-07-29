@@ -7,7 +7,7 @@ use crate::dsl::{
     Adsr, BassKnobs, FmKnobs, KitStyle, Node, PianoKnobs, PluckKnobs, SeqNote, SeqWave, Shape,
     TempoPoint, Value,
 };
-use crate::dsp::Rng;
+use crate::dsp::{self, Rng};
 use std::f32::consts::TAU;
 
 /// The per-seq instrument settings shared by every note.
@@ -256,8 +256,8 @@ fn render_seq(
         let len = ((note.len as f32 * step_dur).min(n as f32) as usize).max(1);
         let avail = (n - start).min(len);
         let envb = adsr(voice.env, len, sr);
-        let f = eval_value(&note.pitch, len, sr);
-        let d = eval_value(voice.duty, len, sr);
+        let f = eval_value(&note.pitch, len, sr, voice.engine);
+        let d = eval_value(voice.duty, len, sr, voice.engine);
         let sig = seq_note_signal(voice, note, &f[..avail], &d[..avail], sr, rng);
         for (i, s) in sig.into_iter().enumerate() {
             out[start + i] += s * envb[i] * gain;
@@ -293,8 +293,8 @@ fn render_seq_mapped(
         let len = end.saturating_sub(start).max(1).min(n);
         let avail = len.min(n - start);
         let envb = adsr(voice.env, len, sr);
-        let f = eval_value(&note.pitch, len, sr);
-        let d = eval_value(voice.duty, len, sr);
+        let f = eval_value(&note.pitch, len, sr, voice.engine);
+        let d = eval_value(voice.duty, len, sr, voice.engine);
         let sig = seq_note_signal(voice, note, &f[..avail], &d[..avail], sr, rng);
         for (i, s) in sig.into_iter().enumerate() {
             out[start + i] += s * envb[i] * gain;
@@ -369,7 +369,7 @@ fn seq_note_signal(
         SeqWave::Sine => {
             let mut phase = 0.0f32;
             for &fi in f {
-                out.push(osc(Shape::Sine, phase));
+                out.push(osc(Shape::Sine, phase, voice.engine));
                 phase += fi.max(0.0) / srf;
                 phase -= phase.floor();
             }
@@ -384,9 +384,9 @@ fn seq_note_signal(
                 let t = i as f32 / srf;
                 let idx = voice.fm.fm_index
                     * (0.4 + 0.6 * note.gain)
-                    * (-t / voice.fm.fm_strike.max(1e-3)).exp();
-                let m = idx * (TAU * mph).sin();
-                out.push((TAU * cph + m).sin());
+                    * dsp::exp(-t / voice.fm.fm_strike.max(1e-3), voice.engine);
+                let m = idx * dsp::sin(TAU * mph, voice.engine);
+                out.push(dsp::sin(TAU * cph + m, voice.engine));
                 cph += dt;
                 cph -= cph.floor();
                 mph += dt * voice.fm.fm_ratio;
@@ -395,22 +395,22 @@ fn seq_note_signal(
         }
         SeqWave::Pluck => out = pluck_note(voice, f, sr, rng),
         SeqWave::Piano if voice.engine >= 3 => out = piano_note_v3(voice, note, f, sr, rng),
-        SeqWave::Piano => out = piano_note_legacy(note, f, sr, rng),
-        SeqWave::Epiano => out = epiano_note(note, f, sr),
-        SeqWave::Organ => out = organ_note(f, sr),
-        SeqWave::Strings => out = strings_note(f, sr),
-        SeqWave::Brass => out = brass_note(note, f, sr),
-        SeqWave::Flute => out = flute_note(note, f, sr, rng),
-        SeqWave::Mallet => out = mallet_note(note, f, sr),
-        SeqWave::Bell => out = bell_note(f, sr),
+        SeqWave::Piano => out = piano_note_legacy(note, f, sr, rng, voice.engine),
+        SeqWave::Epiano => out = epiano_note(note, f, sr, voice.engine),
+        SeqWave::Organ => out = organ_note(f, sr, voice.engine),
+        SeqWave::Strings => out = strings_note(f, sr, voice.engine),
+        SeqWave::Brass => out = brass_note(note, f, sr, voice.engine),
+        SeqWave::Flute => out = flute_note(note, f, sr, rng, voice.engine),
+        SeqWave::Mallet => out = mallet_note(note, f, sr, voice.engine),
+        SeqWave::Bell => out = bell_note(f, sr, voice.engine),
         SeqWave::Bass => out = bass_note(voice, note, f, sr),
-        SeqWave::Kit => out = kit_drum(f, sr, rng, voice.kit),
+        SeqWave::Kit => out = kit_drum(f, sr, rng, voice.kit, voice.engine),
         // Handled wholesale in sampler_seq (shared synthesizer, polyphony).
         SeqWave::Sampler => unreachable!("sampler renders via sampler_seq"),
         SeqWave::Cowbell => {
             for (i, &fi) in f.iter().enumerate() {
                 let t = i as f32 / srf;
-                out.push(cowbell_sample(fi.max(20.0), t));
+                out.push(cowbell_sample(fi.max(20.0), t, voice.engine));
             }
         }
     }
@@ -435,11 +435,14 @@ fn pluck_note(voice: &SeqVoice, f: &[f32], sr: u32, rng: &mut Rng) -> Signal {
     let bright = voice.pluck.pluck_tone.max(0.0);
     let damp = (-voice.pluck.pluck_tone).max(0.0);
     // Fixed guitar-body resonators: Helmholtz air, top plate, back.
-    let body_r = (crate::dsp::NEG_LN_1000 / (0.25 * srf)).exp();
+    let body_r = dsp::exp(crate::dsp::NEG_LN_1000 / (0.25 * srf), voice.engine);
     let body_a2 = -body_r * body_r;
     let body: [(f32, f32); 3] = [(100.0, 1.0), (215.0, 0.8), (400.0, 0.5)].map(|(fr, g)| {
         let w0 = TAU * fr / srf;
-        (2.0 * body_r * w0.cos(), g * w0.sin()) // (a1, b0)
+        (
+            2.0 * body_r * dsp::cos(w0, voice.engine),
+            g * dsp::sin(w0, voice.engine),
+        ) // (a1, b0)
     });
     let (mut by1, mut by2) = ([0.0f32; 3], [0.0f32; 3]);
     let (mut lp, mut hp_in, mut hp_out) = (0.0f32, 0.0f32, 0.0f32);
@@ -518,14 +521,14 @@ fn piano_note_v3(voice: &SeqVoice, note: &SeqNote, f: &[f32], sr: u32, rng: &mut
         if ratio * f0 > 0.45 * srf {
             break; // keep every partial below Nyquist
         }
-        let notch = (std::f32::consts::PI * kf * strike).sin().abs();
-        let amp = notch / kf * bright.powf((kf - 1.0) * 0.18 / hammer);
+        let notch = dsp::sin(std::f32::consts::PI * kf * strike, voice.engine).abs();
+        let amp = notch / kf * dsp::powf(bright, (kf - 1.0) * 0.18 / hammer, voice.engine);
         let decay = (base_decay / (1.0 + 0.55 * (kf - 1.0))).max(0.05);
         partials.push(Partial {
             step: ratio,
             amp,
             env: 1.0,
-            dmul: (-1.0 / (srf * decay)).exp(),
+            dmul: dsp::exp(-1.0 / (srf * decay), voice.engine),
             // Spread start phases (golden ratio) so the onset isn't a
             // hard in-phase transient — deterministic, no RNG draw.
             phase: [(kf * 0.618_034).fract(), (kf * 0.381_966).fract()],
@@ -544,7 +547,7 @@ fn piano_note_v3(voice: &SeqVoice, note: &SeqNote, f: &[f32], sr: u32, rng: &mut
             let inc = dt * p.step;
             let a = p.amp * p.env;
             for (ph, &det) in p.phase.iter_mut().zip(string_det.iter()) {
-                s += a * (TAU * *ph).sin();
+                s += a * dsp::sin(TAU * *ph, voice.engine);
                 *ph += inc * det;
                 *ph -= ph.floor();
             }
@@ -565,7 +568,7 @@ fn piano_note_v3(voice: &SeqVoice, note: &SeqNote, f: &[f32], sr: u32, rng: &mut
 /// slowly against each other — the chorusing shimmer of a real unison pair.
 /// Natural decay time falls with pitch: bass strings ring for seconds,
 /// treble dies in under one.
-fn piano_note_legacy(note: &SeqNote, f: &[f32], sr: u32, rng: &mut Rng) -> Signal {
+fn piano_note_legacy(note: &SeqNote, f: &[f32], sr: u32, rng: &mut Rng, engine: u32) -> Signal {
     let srf = sr as f32;
     let n = f.len();
     let mut out = Vec::with_capacity(n);
@@ -578,9 +581,9 @@ fn piano_note_legacy(note: &SeqNote, f: &[f32], sr: u32, rng: &mut Rng) -> Signa
         let t = i as f32 / srf;
         // Hammer-strike brightness: louder keys strike brighter and
         // the shimmer fades within ~80 ms.
-        let idx = (1.2 + 2.3 * note.gain) * (-t / 0.08).exp();
-        let a = (TAU * cph + idx * (TAU * mph).sin()).sin();
-        let b = (TAU * cph2 + idx * (TAU * mph2).sin()).sin();
+        let idx = (1.2 + 2.3 * note.gain) * dsp::exp(-t / 0.08, engine);
+        let a = dsp::sin(TAU * cph + idx * dsp::sin(TAU * mph, engine), engine);
+        let b = dsp::sin(TAU * cph2 + idx * dsp::sin(TAU * mph2, engine), engine);
         cph += dt / detune;
         cph -= cph.floor();
         mph += dt / detune;
@@ -595,14 +598,14 @@ fn piano_note_legacy(note: &SeqNote, f: &[f32], sr: u32, rng: &mut Rng) -> Signa
         } else {
             0.0
         };
-        out.push((0.5 * (a + b) + thump) * (-t / decay).exp());
+        out.push((0.5 * (a + b) + thump) * dsp::exp(-t / decay, engine));
     }
     out
 }
 
 /// Rhodes-style e-piano: a soft FM body (1:1) under a metal tine (14:1)
 /// that pings on the attack. Velocity opens the tine.
-fn epiano_note(note: &SeqNote, f: &[f32], sr: u32) -> Signal {
+fn epiano_note(note: &SeqNote, f: &[f32], sr: u32, engine: u32) -> Signal {
     let srf = sr as f32;
     let n = f.len();
     let mut out = Vec::with_capacity(n);
@@ -611,17 +614,17 @@ fn epiano_note(note: &SeqNote, f: &[f32], sr: u32) -> Signal {
     for (i, &fi) in f.iter().enumerate() {
         let dt = fi.max(0.0) / srf;
         let t = i as f32 / srf;
-        let body_idx = (0.5 + 1.0 * note.gain) * (-t / 0.5).exp();
-        let tine_idx = (0.8 + 1.4 * note.gain) * (-t / 0.035).exp();
-        let body = (TAU * cph + body_idx * (TAU * mph).sin()).sin();
-        let tine = (TAU * cph + tine_idx * (TAU * tph).sin()).sin();
+        let body_idx = (0.5 + 1.0 * note.gain) * dsp::exp(-t / 0.5, engine);
+        let tine_idx = (0.8 + 1.4 * note.gain) * dsp::exp(-t / 0.035, engine);
+        let body = dsp::sin(TAU * cph + body_idx * dsp::sin(TAU * mph, engine), engine);
+        let tine = dsp::sin(TAU * cph + tine_idx * dsp::sin(TAU * tph, engine), engine);
         cph += dt;
         cph -= cph.floor();
         mph += dt;
         mph -= mph.floor();
         tph += dt * 14.0;
         tph -= tph.floor();
-        out.push((0.75 * body + 0.25 * tine) * (-t / decay).exp());
+        out.push((0.75 * body + 0.25 * tine) * dsp::exp(-t / decay, engine));
     }
     out
 }
@@ -629,7 +632,7 @@ fn epiano_note(note: &SeqNote, f: &[f32], sr: u32) -> Signal {
 /// Tonewheel organ: drawbars over half the fundamental (so the 16′ bar is
 /// an integer partial and every phase wraps cleanly): 16′ 8′ 4′ 2⅔′ 2′,
 /// plus the classic percussion ping on the attack.
-fn organ_note(f: &[f32], sr: u32) -> Signal {
+fn organ_note(f: &[f32], sr: u32, engine: u32) -> Signal {
     let srf = sr as f32;
     let n = f.len();
     let mut out = Vec::with_capacity(n);
@@ -646,10 +649,10 @@ fn organ_note(f: &[f32], sr: u32) -> Signal {
         let t = i as f32 / srf;
         let mut s = 0.0;
         for (k, g) in BARS {
-            s += g * (TAU * phase * k).sin();
+            s += g * dsp::sin(TAU * phase * k, engine);
         }
         // Percussion: a 3rd-harmonic ping that fades in 200 ms.
-        s += 0.5 * (-t / 0.2).exp() * (TAU * phase * 6.0).sin();
+        s += 0.5 * dsp::exp(-t / 0.2, engine) * dsp::sin(TAU * phase * 6.0, engine);
         out.push(s * norm);
         phase += fi.max(0.0) / 2.0 / srf;
         // Wrap on the full drawbar cycle to keep precision.
@@ -660,13 +663,13 @@ fn organ_note(f: &[f32], sr: u32) -> Signal {
 
 /// String ensemble: three saws detuned ±8 cents, phase-spread, swelling
 /// in like a bow stroke, mellowed by a one-pole lowpass.
-fn strings_note(f: &[f32], sr: u32) -> Signal {
+fn strings_note(f: &[f32], sr: u32, engine: u32) -> Signal {
     let srf = sr as f32;
     let n = f.len();
     let mut out = Vec::with_capacity(n);
     let detunes = [0.995_39f32, 1.0, 1.004_63]; // ∓8 cents
     let mut phases = [0.0f32, 0.33, 0.67];
-    let lp_a = 1.0 - (-TAU * 3_000.0 / srf).exp();
+    let lp_a = 1.0 - dsp::exp(-TAU * 3_000.0 / srf, engine);
     let mut lp = 0.0f32;
     for (i, &fi) in f.iter().enumerate() {
         let t = i as f32 / srf;
@@ -678,7 +681,7 @@ fn strings_note(f: &[f32], sr: u32) -> Signal {
             *p -= p.floor();
         }
         lp += lp_a * (s / 3.0 - lp);
-        let swell = 1.0 - (-t / 0.12).exp();
+        let swell = 1.0 - dsp::exp(-t / 0.12, engine);
         out.push(lp * swell);
     }
     out
@@ -687,7 +690,7 @@ fn strings_note(f: &[f32], sr: u32) -> Signal {
 /// Brass: two band-limited saws detuned ±0.4% through a one-pole lowpass
 /// whose cutoff swells from ~800 Hz toward ~2.2 kHz over the first ~70 ms —
 /// the lip-reed "blat" of a horn attack. Velocity opens the filter further.
-fn brass_note(note: &SeqNote, f: &[f32], sr: u32) -> Signal {
+fn brass_note(note: &SeqNote, f: &[f32], sr: u32, engine: u32) -> Signal {
     let srf = sr as f32;
     let n = f.len();
     let mut out = Vec::with_capacity(n);
@@ -704,8 +707,8 @@ fn brass_note(note: &SeqNote, f: &[f32], sr: u32) -> Signal {
             *p -= p.floor();
         }
         // The blat: cutoff opens over ~70 ms; velocity pushes it brighter.
-        let cutoff = 800.0 + (1_400.0 + 1_200.0 * note.gain) * (1.0 - (-t / 0.07).exp());
-        let a = 1.0 - (-TAU * cutoff.min(0.45 * srf) / srf).exp();
+        let cutoff = 800.0 + (1_400.0 + 1_200.0 * note.gain) * (1.0 - dsp::exp(-t / 0.07, engine));
+        let a = 1.0 - dsp::exp(-TAU * cutoff.min(0.45 * srf) / srf, engine);
         lp += a * (s * 0.5 - lp);
         out.push(lp);
     }
@@ -716,24 +719,24 @@ fn brass_note(note: &SeqNote, f: &[f32], sr: u32) -> Signal {
 /// (a player settling into the note), over breath — white noise through a
 /// gentle one-pole lowpass, louder with velocity. One RNG draw per sample,
 /// in sample order, so chunking can't change the output.
-fn flute_note(note: &SeqNote, f: &[f32], sr: u32, rng: &mut Rng) -> Signal {
+fn flute_note(note: &SeqNote, f: &[f32], sr: u32, rng: &mut Rng, engine: u32) -> Signal {
     let srf = sr as f32;
     let n = f.len();
     let mut out = Vec::with_capacity(n);
-    let lp_a = 1.0 - (-TAU * 1_200.0 / srf).exp();
+    let lp_a = 1.0 - dsp::exp(-TAU * 1_200.0 / srf, engine);
     let (mut phase, mut vib, mut lp) = (0.0f32, 0.0f32, 0.0f32);
     for (i, &fi) in f.iter().enumerate() {
         let t = i as f32 / srf;
         // Vibrato swells in after the attack, to ±0.6% of pitch.
-        let depth = 0.006 * (1.0 - (-t / 0.15).exp());
-        let fmod = 1.0 + depth * (TAU * vib).sin();
+        let depth = 0.006 * (1.0 - dsp::exp(-t / 0.15, engine));
+        let fmod = 1.0 + depth * dsp::sin(TAU * vib, engine);
         vib += 5.5 / srf;
         vib -= vib.floor();
         phase += fi.max(0.0) * fmod / srf;
         phase -= phase.floor();
         // Breath: one draw per sample, lowpassed to an airy hiss.
         lp += lp_a * (rng.bi() - lp);
-        out.push(0.9 * (TAU * phase).sin() + (0.02 + 0.03 * note.gain) * lp);
+        out.push(0.9 * dsp::sin(TAU * phase, engine) + (0.02 + 0.03 * note.gain) * lp);
     }
     out
 }
@@ -742,7 +745,7 @@ fn flute_note(note: &SeqNote, f: &[f32], sr: u32, rng: &mut Rng) -> Signal {
 /// partials (ratios ~3.9 and ~9.2 — the wooden bar modes) that die in tens
 /// of milliseconds. Velocity brightens the strike. Woodier and
 /// shorter-lived than the e-piano.
-fn mallet_note(note: &SeqNote, f: &[f32], sr: u32) -> Signal {
+fn mallet_note(note: &SeqNote, f: &[f32], sr: u32, engine: u32) -> Signal {
     let srf = sr as f32;
     let n = f.len();
     let mut out = Vec::with_capacity(n);
@@ -751,9 +754,9 @@ fn mallet_note(note: &SeqNote, f: &[f32], sr: u32) -> Signal {
     for (i, &fi) in f.iter().enumerate() {
         let dt = fi.max(0.0) / srf;
         let t = i as f32 / srf;
-        let s = (TAU * ph[0]).sin()
-            + bright * 0.5 * (-t / 0.03).exp() * (TAU * ph[1]).sin()
-            + bright * 0.25 * (-t / 0.01).exp() * (TAU * ph[2]).sin();
+        let s = dsp::sin(TAU * ph[0], engine)
+            + bright * 0.5 * dsp::exp(-t / 0.03, engine) * dsp::sin(TAU * ph[1], engine)
+            + bright * 0.25 * dsp::exp(-t / 0.01, engine) * dsp::sin(TAU * ph[2], engine);
         out.push(0.7 * s);
         ph[0] += dt;
         ph[1] += dt * 3.9;
@@ -769,7 +772,7 @@ fn mallet_note(note: &SeqNote, f: &[f32], sr: u32) -> Signal {
 /// the hum/prime/tierce stack of a real bell), each with its own decay so
 /// the highs die first and the hum rings on, plus a 0.1% detuned twin of
 /// the fundamental whose slow beating is the shimmer.
-fn bell_note(f: &[f32], sr: u32) -> Signal {
+fn bell_note(f: &[f32], sr: u32, engine: u32) -> Signal {
     let srf = sr as f32;
     let n = f.len();
     let mut out = Vec::with_capacity(n);
@@ -788,12 +791,12 @@ fn bell_note(f: &[f32], sr: u32) -> Signal {
         let t = i as f32 / srf;
         let mut s = 0.0;
         for (j, &(ratio, g, decay)) in PARTIALS.iter().enumerate() {
-            s += g * (-t / decay.max(1e-3)).exp() * (TAU * phases[j]).sin();
+            s += g * dsp::exp(-t / decay.max(1e-3), engine) * dsp::sin(TAU * phases[j], engine);
             phases[j] += dt * ratio;
             phases[j] -= phases[j].floor();
         }
         // 0.1% detuned twin of the fundamental: the slow-beat shimmer.
-        s += (-t / 3.0).exp() * (TAU * phases[5]).sin();
+        s += dsp::exp(-t / 3.0, engine) * dsp::sin(TAU * phases[5], engine);
         phases[5] += dt * 1.001;
         phases[5] -= phases[5].floor();
         out.push(s * norm);
@@ -822,14 +825,16 @@ fn bass_note(voice: &SeqVoice, note: &SeqNote, f: &[f32], sr: u32) -> Signal {
         let t = i as f32 / srf;
         let saw = (2.0 * phase - 1.0) - poly_blep(phase, dt);
         let cutoff = voice.bass.bass_cutoff
-            + (voice.bass.bass_env + voice.bass.bass_env_vel * note.gain) * (-t / decay).exp()
-            + voice.bass.bass_click * (-t / BASS_CLICK_TAU).exp();
-        let a = 1.0 - (-TAU * cutoff / srf).exp();
+            + (voice.bass.bass_env + voice.bass.bass_env_vel * note.gain)
+                * dsp::exp(-t / decay, voice.engine)
+            + voice.bass.bass_click * dsp::exp(-t / BASS_CLICK_TAU, voice.engine);
+        let a = 1.0 - dsp::exp(-TAU * cutoff / srf, voice.engine);
         lp += a * (saw - lp);
-        let body = lp + drive * ((lp * (1.0 + 2.0 * drive)).tanh() - lp);
-        let sub = (TAU * sub_phase).sin();
+        let body = lp + drive * (dsp::tanh(lp * (1.0 + 2.0 * drive), voice.engine) - lp);
+        let sub = dsp::sin(TAU * sub_phase, voice.engine);
         out.push(
-            (voice.bass.bass_body * body + voice.bass.bass_sub * sub) * (-t / body_decay).exp(),
+            (voice.bass.bass_body * body + voice.bass.bass_sub * sub)
+                * dsp::exp(-t / body_decay, voice.engine),
         );
         phase += dt;
         phase -= phase.floor();
@@ -893,8 +898,8 @@ pub(super) fn sampler_seq_stereo(
             continue;
         }
         let len = ((note.len as f32 * step_dur).min(n as f32) as usize).max(1);
-        let hz = eval_value(&note.pitch, 1, sr)[0].max(8.0);
-        let key = crate::dsp::hz_to_midi(hz).round() as i32;
+        let hz = eval_value(&note.pitch, 1, sr, voice.engine)[0].max(8.0);
+        let key = crate::dsp::hz_to_midi_e(hz, voice.engine).round() as i32;
         let vel = ((gain * 127.0) as i32).clamp(1, 127);
         events.push((start, true, key.clamp(0, 127), vel));
         events.push(((start + len).min(n), false, key.clamp(0, 127), 0));
