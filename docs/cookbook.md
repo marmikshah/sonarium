@@ -342,6 +342,58 @@ optional song-level `seed`; tracks can be `mute`d or `solo`ed (console
 semantics: solo mutes every non-solo track). All of it lands in the Program,
 so a saved bundle reproduces its audio exactly.
 
+**Tempo and meter maps.** A song's tempo can move: `tempo_map` lists changes
+at exact beat positions (rationals — tuplets never drift), applied
+segment-wise, so a note crossing a change keeps its musical length:
+
+```json
+"tempo_map": [ { "at": { "num": 0, "den": 1 }, "bpm": 120 },
+               { "at": { "num": 16, "den": 1 }, "bpm": 90 } ]
+```
+
+Time signatures move the same way — `meter_map` by bar, with numerator AND
+denominator (6/8 counts 3 quarter-beats a bar) — and `pickup` gives bar 0 a
+shorter length (anacrusis). A placement that would land between grid steps
+is a compile error (`T1005`), never a silent rounding; raise
+`steps_per_beat` or move the change onto the grid. Songs without maps
+compile byte-identically to before. `sections` (named bar ranges) and
+`markers` (named beat points) are metadata the Program preserves for the
+runtime's quantized transitions.
+
+**Automation.** Song tracks automate `gain`/`pan` in beats, compiled through
+the tempo map segment-wise; each lane picks a curve — `linear` (default),
+`step` (hold then jump), or `exp` (geometric between positive endpoints):
+
+```json
+"automation": [ { "target": "gain", "curve": "exp",
+  "points": [ { "at": 0.0, "v": 0.2 }, { "at": 16.0, "v": 0.9 } ] } ]
+```
+
+**Buses.** A tracks root (compiled or hand-written) gains named `buses` —
+submixes with insert chains and return faders. A track routes with `bus`,
+or feeds a bus post-fader with `sends` (the send taps the ducked, automated
+signal, so the reverb tail pumps with the mix):
+
+```json
+"buses": [ { "id": "verb", "gain": 0.8, "effects": [ { "type": "reverb", "room": 0.6, "mix": 1.0 } ] } ]
+```
+
+`tono render --stems DIR` writes every track's positioned contribution and
+every bus's return as separate stereo WAVs (pre-master-chain); the Python
+`Program.render_stems()` returns the same as arrays. Stems carry their
+routing — master-routed stems plus bus returns sum to the exact mix the
+master chain hears.
+
+**Patterns and harmony, in code.** The `song::pattern` module (Rust) and
+`Pattern` methods (Python) transform patterns purely: repeat/concat/layer/
+slice/transpose/stretch/rotate/reverse/quantize, `vel`/`gate`, Euclidean
+and tuplet constructors, and deterministic `probability`/`humanize` seeded
+per pattern. Stretch is exact or errors (off-grid names the note);
+transpose keeps `midi:N` notes as drums. The `music` module (Rust) /
+`tono.Pitch`/`Key`/`Chord` (Python) answer harmony questions with a strict
+spelling grammar — `Key("A minor").degree(3)`, `Chord("Cm7").arp()` —
+never a silent guess at an ambiguous name.
+
 ## More timbres
 
 - **PWM lead:** `square` with a modulated `duty` — `{ "lfo": { "shape": "sine", "rate": 5, "depth": 0.3, "center": 0.5 } }`.
@@ -442,11 +494,10 @@ uses, so the pump character matches. The source renders untouched; only the
 follower dips, and it ducks when the source actually lands on the bus (the
 source's `at` offset is honored). Several tracks may follow one source, but a
 source must be a plain track (no follower-of-follower chains — duck directly
-to the source's source). Sidechaining is **offline-only** for now: the
-streaming renderer doesn't stream a `tracks` root at all (it reports
-`StreamBlocker::TracksRoot`), so a sidechained mix plays live only through
-the buffer-backed `Player`/`Engine` fallback — render once, then play. To pump
-in a natively streamed sound, use a `duck` node inside the graph instead:
+to the source's source). A sidechained mix **streams natively**: the duck
+envelope advances per sample, so a schema-v2 `tracks` root — sidechains,
+buses, and all — streams byte-identically to the offline bounce (v1
+documents keep the buffer-backed `Player` fallback):
 ```json
 { "name": "pump", "duration": 2.0, "version": 2, "root": { "type": "tracks", "tracks": [
     { "id": "kick", "node": { "type": "seq", "bpm": 120, "steps_per_beat": 1, "wave": "sine",
