@@ -259,3 +259,37 @@ fn renderer_fill_is_allocation_free() {
         "Renderer::fill allocated on the audio path"
     );
 }
+
+/// A small second program for swap tests (a plain lead, also streamable).
+fn other_program() -> Arc<tono_core::program::Program> {
+    let mut song = Song::new("rt-alloc-other", 100.0);
+    song.add_track("lead", SeqWave::Square, amp());
+    song.tracks[0].notes.push(note(0, 16, "A4"));
+    Arc::new(song.compile(&CompileOptions::default()).expect("compiles"))
+}
+
+#[test]
+fn performance_fill_across_a_swap_is_allocation_free() {
+    let _guard = serial();
+    let mut p = Performance::new(program());
+    p.schedule(Command::Play, At::Immediate).unwrap();
+    // The new program's source builds HERE, at schedule time (a full probe
+    // render) — off the audio path, before counting starts.
+    p.swap_to(other_program(), At::Frame(8 * 1024)).unwrap();
+
+    let mut block = vec![0.0f32; 1024 * 2];
+    for _ in 0..4 {
+        p.fill(&mut block); // frames 0..4096, counted off
+    }
+    start_counting();
+    for _ in 0..12 {
+        p.fill(&mut block); // the swap executes at frame 8192, mid-block
+    }
+    let allocs = stop_counting();
+    assert_eq!(p.metrics().swaps, 1, "the swap really happened");
+    assert_eq!(
+        allocs, 0,
+        "executing a swap inside Performance::fill must not render or allocate \
+         (the source built at schedule time)"
+    );
+}

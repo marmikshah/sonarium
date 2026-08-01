@@ -77,6 +77,14 @@ move existing work forward.
   successor. It keeps working through v1.10.
 
 ### Fixed
+- **A program swap rendered on the audio path.** Executing a scheduled
+  `Command::Swap` built the new program's source (a full probe render, or a
+  full offline bounce for a non-streamable program) inside
+  `Performance::fill` — allocation and O(duration) work at the exact musical
+  boundary, the violation the real-time gate exists to prevent. Swap
+  sources now build at schedule time (the same discipline stingers already
+  had), keyed by the command's seq and replayed swaps included; the new
+  `rt_alloc` gate proves zero allocations across a swap.
 - **Two contract violations found by the new proptest suite**, each pinned by
   a regression test: a tracks automation lane with exactly one point whose
   time is NaN (or any single-point lane at `sample_rate` 0) indexed past the
