@@ -51,7 +51,8 @@ drums = song.track("drums", tono.instruments.drums("tr808"))
 bass = song.track("bass", tono.instruments.bass("finger"))
 
 beat = tono.Pattern(bars=1)
-beat.hit("kick", beats=[0, 2]).hit("snare", beats=[1, 3])
+beat.hit("kick", beats=[0, 2])
+beat.hit("snare", beats=[1, 3])
 riff = tono.Pattern(bars=1)
 riff.notes(["C2", "C2", "Eb2", "G2"], durations=0.5)
 

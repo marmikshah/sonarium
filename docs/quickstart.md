@@ -1,123 +1,81 @@
 # tono in ten minutes
 
-The zero-assumptions start: from nothing to a sound you built, heard, and
-changed on purpose. All you need is a Rust toolchain
-([rustup.rs](https://rustup.rs)) — everything else is one install.
+From nothing to a sound you built, heard, and changed on purpose — five
+steps. All you need is a Rust toolchain ([rustup.rs](https://rustup.rs)).
 
 ## 1. Install the CLI
 
 ```sh
 cargo install tono
-tono --version
+tono --version   # tono 1.10.0
 ```
 
-That's the whole setup. A sound in tono is a **SoundDoc** — a small JSON file
-describing a synthesis graph — and the CLI renders it to audio plus pictures
-and numbers, so you can author by looking, not guessing.
+## 2. Render your first sound
 
-## 2. Your first sound (2 minutes)
-
-Save this as `blip.json`:
+A sound in tono is a **SoundDoc** — a small JSON file describing a synthesis
+graph. Save this as `blip.json`:
 
 ```json
-{ "name": "blip", "duration": 0.3, "engine": 4,
+{ "name": "blip", "duration": 0.3, "engine": 5,
   "root": { "type": "mul", "inputs": [
     { "type": "sine", "freq": 880 },
     { "type": "env", "a": 0.002, "d": 0.08, "s": 0.0, "r": 0.05 } ] } }
 ```
 
-Render it:
-
 ```sh
 tono render blip.json -o out/
 ```
 
-You get four files:
+`"engine": 5` pins the current DSP kernels: the render is byte-identical on
+any machine.
 
-- `out/blip.wav` — the audio.
-- `out/blip.png` — the **spectrogram** (frequency over time). Look at it first.
-- `out/blip_wave.png` — the waveform (loudness over time). Look at it second.
-- `out/blip.stats.json` — the numbers: peak, loudness, brightness, attack/decay.
+## 3. See it, then hear it
 
-Hear it (needs the playback feature):
+`out/` holds four files:
+
+| File | What it shows |
+| --- | --- |
+| `blip.wav` | the audio |
+| `blip.png` | the spectrogram (frequency over time) — look at it first |
+| `blip_wave.png` | the waveform (loudness over time) — look at it second |
+| `blip.stats.json` | the numbers: peak, loudness, brightness, attack/decay |
+
+Author by looking, not guessing. To hear it through the speakers, add the
+playback feature:
 
 ```sh
 cargo install tono --features play
 tono play blip.json
 ```
 
-## 3. Change one thing, see what changed
+## 4. Change one thing, measure it
 
-Copy `blip.json` to `blip2.json` and, in the copy, change `"freq": 880` to
-`"freq": 220`. Now ask what that did:
+Copy `blip.json` to `blip2.json`, change `"freq": 880` to `"freq": 220` in
+the copy, and ask what that did:
 
 ```sh
 tono diff blip.json blip2.json
 ```
 
-It renders both and compares: the `centroid_hz` row shows the brightness drop
-in Hz, and the bottom line gives the sample-domain distance. (Identical docs
-answer "sample-identical".) This is the loop: **edit → diff → judge**.
+- The `centroid_hz` row shows the brightness drop (881 → 221 Hz here).
+- The bottom line is the sample-domain distance; identical docs answer
+  "sample-identical".
 
-## 4. The loop at full speed
+That is the loop: **edit → diff → judge**. Run it at full speed — every save
+re-renders the images and stats (Ctrl-C to stop):
 
 ```sh
 tono render blip.json -o out/ --watch
 ```
 
-Leave it running, edit the JSON in your editor, and every save re-renders with
-fresh images and stats. Ctrl-C to stop.
+## 5. Pick your next step
 
-## 5. A whole song from Python (5 minutes)
-
-The typed Python API composes full music — no JSON, and the deterministic
-guarantee is the same: an equivalent song compiles to the same canonical
-hash from Python or Rust.
-
-```sh
-pip install tono  # or maturin develop in crates/tono-py
-```
-
-```python
-import tono
-
-song = tono.Song("night-drive", tempo=122)
-
-drums = song.track("drums", tono.instruments.drums("tr808"))
-bass = song.track("bass", tono.instruments.bass("finger"))
-
-beat = tono.Pattern(bars=1)
-beat.hit("kick", beats=[0, 2])
-beat.hit("snare", beats=[1, 3])
-beat.hit("hat", beats=[0.5, 1.5, 2.5, 3.5])
-
-riff = tono.Pattern(bars=1)
-riff.notes(["C2", "C2", "Eb2", "G2"], durations=0.5)
-
-song.arrange(drums, beat, bars=range(4))
-song.arrange(bass, riff, bars=range(4))
-
-program = song.compile(sample_rate=48_000)
-print(hex(program.hash), program.estimates)
-audio = program.render()          # float32, shape (frames, 2), L/R
-program.save("night-drive.program.json")
-```
-
-A compile that fails raises `tono.CompileError` with `.diagnostics` — every
-problem in one pass, each with a stable code, the object path, and the fix.
-
-## Where next?
-
-- **Make sounds (SFX, UI, impacts)** — the [cookbook](cookbook.md): the full
-  node vocabulary and recipes, plus how to judge a sound by its stats.
-- **Make music** — the cookbook's `seq` chapter, then the song layer
-  ([`song`](https://docs.rs/tono-core/latest/tono_core/song/) on docs.rs):
-  patterns, tracks, arrangements.
-- **Put it in a game** — [docs/runtime.md](runtime.md): the live Engine/Mixer
-  runtime and parametric patches (zero-asset SFX at runtime).
-- **Use it from Python** — [crates/tono-py](../crates/tono-py/README.md).
-- **No code at all** — the desktop pattern station
-  ([build it](../crates/tono-desktop)) or the playground examples
-  (`cargo run -p tono-play --example live_band`).
+| I want to… | Go to |
+| --- | --- |
+| Make sounds (SFX, UI, impacts) | [cookbook.md](cookbook.md) — the full node vocabulary, recipes, and how to judge a sound by its stats |
+| Make music | the cookbook's [`seq` chapter](cookbook.md#music-with-seq), then the song layer — patterns, tracks, arrangements ([docs.rs](https://docs.rs/tono-core/latest/tono_core/song/)) |
+| Use it from Python | [crates/tono-py](../crates/tono-py/README.md) — the typed `Song`/`Pattern`/`Program` API; an equivalent song compiles to the same hash from Python or Rust |
+| Put it in a game | [runtime.md](runtime.md) — the live Engine/Mixer runtime and parametric patches (zero-asset SFX at runtime) |
+| Write no code | the desktop pattern station ([build it](../crates/tono-desktop)) or the playground examples (`cargo run -p tono-play --example live_band`) |
 
 The full map lives in [docs/README.md](README.md).

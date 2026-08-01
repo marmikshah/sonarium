@@ -1,65 +1,102 @@
-# Embedding tono — the live runtime and parametric patches
+# Embed tono live — the runtime and parametric patches
 
-The same deterministic engine that renders on the command line and in the
-desktop studio also runs **inside your game**. A game depends on the pure
-[`tono-core`](../crates/tono-core) crate and gets two things: a **live
-runtime** (an embeddable engine/mixer that serves real-time audio) and
+Depend on the pure [`tono-core`](../crates/tono-core) crate and your game gets
+the same deterministic engine the CLI and studio render with: a **live
+runtime** (sample-accurate song playback, a voice engine, a mixer) and
 **patches** — `SoundDoc` templates with named parameters that render
-per-instance variations at runtime, an impact that scales with collision
-force, a footstep that varies by surface, with **zero baked WAV files** — a
-sound is a function of its inputs, never a recorded asset.
+per-instance variations at runtime (an impact that scales with collision
+force, a footstep that varies by surface). Zero baked WAV files: a sound is a
+function of its inputs, never a recorded asset.
 
-## The live runtime in 60 seconds
+## Run a song live in 60 seconds
 
-The lazy version of this whole page: a drum kit and a piano in one `Mixer`,
-notes sent live from your code — a runnable, compile-checked example at
-`cargo run -p tono-play --example live_band`
-([source](../crates/tono-play/examples/live_band.rs)).
+A compiled `Program` plays through a **`Performance`**: a sample-accurate
+transport plus a bounded, submission-ordered command queue, so musical
+scheduling never depends on a game loop or an OS timer waking on the
+boundary:
+
+```rust
+use tono_core::runtime::{At, Command, Performance};
+
+let mut perf = Performance::new(program.into());      // program: a compiled tono_core Program
+perf.schedule(Command::Play, At::Immediate)?;
+perf.schedule(Command::SetGain(0.8), At::NextBar)?;   // ramped, click-free
+perf.transition_to_section("chorus", At::NextBar)?;
+// perf.fill(&mut block) on the render side — each command lands on its exact frame.
+```
+
+Commands carry musical positions (beats, bars, markers, section names),
+resolved to exact frames at schedule time. Identical timestamps execute in
+submission order; a full queue (4096 commands) is a defined rejection, never
+a stall.
 
 Everything live implements one trait — `runtime::AudioSource` ("fill this
 interleaved-stereo buffer") — so your output adapter never depends on a
-concrete engine type:
+concrete engine type.
 
-```rust
-use tono_core::runtime::{Engine, Priority};
+## Pick the runtime object
 
-let mut engine = Engine::new(48_000);
-engine.set_max_voices(32);                                  // polyphony budget
-let music = engine.load(&bgm_doc);
-engine.play_looping_prioritized(music, Priority::CRITICAL); // never stolen
-```
+| Object | What it's for |
+|---|---|
+| `runtime::Performance` | Play compiled songs live: transport, scheduling, program swaps, stingers, replay. |
+| `runtime::Engine` | Load docs/patches as resources, spawn instances, tween parameters, cap polyphony with priority stealing. |
+| `runtime::Mixer` | Route any set of sources through buses with live insert chains (reverb/EQ/compressor) and post-fader sends. |
+| `adaptive::AdaptiveMusic` | Intensity-layered stems, beat-quantized transitions, stingers on the downbeat, sidechain ducking. |
+| `instrument::Instrument` | A polyphonic, playable voice over any patch (`note_on`/`note_off`, sustain, bends, per-note params) for live keyboards. |
+| `Engine::split(ring_frames)` → `(Controller, Renderer)` | The wait-free seam for a real audio thread: a `Controller` for your game loop, a lock-free `Renderer` for the callback — no mutex ever touches the audio thread. |
 
-- **`Engine`** — load docs/patches as resources, spawn instances, tween
-  parameters, cap polyphony with priority stealing.
-- **`Mixer`** — route any set of sources through buses with live insert
-  chains (reverb/EQ/compressor) and post-fader sends.
-- **`Engine::split(ring_frames)`** — the wait-free seam for a real audio
-  thread: a `Controller` for your game loop, a lock-free `Renderer` for the
-  callback. No mutex ever touches the audio thread.
-- **`adaptive::AdaptiveMusic`** — intensity-layered stems, beat-quantized
-  section transitions, stingers on the downbeat, sidechain ducking.
-- **`instrument::Instrument`** — a polyphonic, playable voice over any patch
-  (note_on/note_off, bends, mod wheel) for live keyboards.
+A runnable, compile-checked `Engine`/`Mixer` example — a drum kit and a
+piano, notes sent live from code:
+`cargo run -p tono-play --example live_band`
+([source](../crates/tono-play/examples/live_band.rs)).
 
 API detail lives on [docs.rs](https://docs.rs/tono-core); the
 [architecture guide](https://marmikshah.github.io/tono/architecture.html)
-explains how the pieces compose. The rest of this page covers patches.
+explains how the pieces compose.
 
-## The idea
+## Drive the Performance
 
-A `Patch` is a template document plus parameters, each bound to one or more graph
-paths. Instantiating with runtime values bakes a concrete `SoundDoc`, which the
-renderer turns into audio:
+- **Transport**: play/pause/stop, seeks by frame/beat/bar, loop ranges by
+  frames or bars; position reads back as frames, beats, or bars — the same
+  exact walks the compiler used, so they can't disagree.
+- **Playback**: native streaming for schema-v2 `tracks` programs
+  (byte-identical to the offline bounce at any block size — automation,
+  sidechains, buses and all); everything else plays the pre-rendered
+  bounce. Seeks rebuild deterministically.
+- **Swaps**: `swap_to` crossfades programs at a frame, beat, bar, or
+  section boundary — a rejected target keeps the last valid program
+  running.
+- **Stingers**: `stinger(doc, gain, at)` renders at schedule time, never on
+  the render path.
+- **Metrics**: `metrics()` reads frames rendered, commands
+  executed/dropped, max queue depth, swaps, stingers — safe to read off the
+  audio callback, no formatting or allocation on it.
+- **Replay**: `start_capture`/`stop_capture` records timestamped commands;
+  replaying them reproduces the take bit-for-bit.
+
+Schedule at least one pump quantum (plus the ring depth, for split/threaded
+use) ahead of the musical point — the queue executes at exact frames, so
+anything earlier is free and anything later is late.
+
+Python gets the same surface as `tono.Performance` — live (speaker) or
+`headless=True` for tests and servers (`.fill(frames)` renders manually),
+with `tono.next_bar()`-style scheduling helpers.
+
+## Patch a sound, not a WAV
+
+A `Patch` is a template document plus parameters, each bound to one or more
+graph paths. Instantiating with runtime values bakes a concrete `SoundDoc`,
+which the renderer turns into audio:
 
 ```
 Patch (shipped JSON)  +  { hardness: 0.8, size: 1.3 }  →  SoundDoc  →  samples
 ```
 
 Determinism holds: the same patch and the same values always render
-byte-identically, so a recorded performance reproduces exactly, and you can bake
-to WAV offline and stream the identical thing in-engine.
+byte-identically, so a recorded performance reproduces exactly, and you can
+bake to WAV offline and stream the identical thing in-engine.
 
-## Using it from a game (Rust)
+### Render one from Rust
 
 ```toml
 # Cargo.toml
@@ -84,12 +121,13 @@ fn on_collision(patch: &Patch, force: f32, object_size: f32) -> Vec<f32> {
 }
 ```
 
-`patch.render(values)` is the one call: missing parameters fall back to their
-`default`, out-of-range values clamp, and a bad path is a clear error — never a
-corrupt graph. Use `patch.instantiate(values)` if you want the concrete
-`SoundDoc` (e.g. to stereoize, loop, or analyse it) instead of mono samples.
+- `patch.render(&values)` is the one call: missing parameters fall back to
+  their `default`, out-of-range values clamp, a bad path is a clear error —
+  never a corrupt graph.
+- Want the concrete `SoundDoc` instead of mono samples (to stereoize, loop,
+  or analyse it)? Use `patch.instantiate(&values)`.
 
-## The patch format
+### Write the patch format
 
 ```json
 {
@@ -104,57 +142,16 @@ corrupt graph. Use `patch.instantiate(values)` if you want the concrete
 }
 ```
 
-One parameter can drive several paths at once (here `size` rings every modal
-partial longer). Paths are the same ones `tono_core::edit::describe` / `apply_ops` use, so
-an agent can design the sound in the studio, read off the paths, and emit the
-patch. A worked example: [`docs/examples/parametric-impact.patch.json`](examples/parametric-impact.patch.json).
+- One parameter can drive several paths at once (here `size` rings every
+  modal partial longer).
+- Paths are the same ones `tono_core::edit::describe` / `apply_ops` use, so
+  an agent can design the sound in the studio, read off the paths, and emit
+  the patch.
+- Worked example:
+  [`docs/examples/parametric-impact.patch.json`](examples/parametric-impact.patch.json).
 
-## Running a compiled song — `Performance`
-
-A compiled `Program` runs through a **`Performance`**: a sample-accurate
-transport plus a bounded, submission-ordered command queue, so musical
-scheduling never depends on Python, a game loop, or an OS timer waking on
-the boundary. Commands carry musical positions (beats, bars, markers,
-section names) resolved to exact frames at schedule time, and execute at
-those frames — with deterministic ordering for identical timestamps and a
-defined rejection when the queue is full:
-
-```rust
-let mut perf = tono_core::runtime::Performance::new(program.into());
-perf.schedule(tono_core::runtime::Command::Play, tono_core::runtime::At::Immediate)?;
-perf.schedule(tono_core::runtime::Command::SetGain(0.8), tono_core::runtime::At::NextBar)?;
-perf.transition_to_section("chorus", tono_core::runtime::At::NextBar)?;
-// perf.fill(&mut block) on the render side — commands land on exact frames.
-```
-
-- **Transport**: play/pause/stop, seeks by frame/beat/bar, loop ranges by
-  frames or bars; position reads back as frames, beats, or bars — the same
-  exact walks the compiler used, so they can't disagree.
-- **Playback**: native streaming for schema-v2 `tracks` programs
-  (byte-identical to the offline bounce at any block size — automation,
-  sidechains, buses and all); everything else plays the pre-rendered
-  bounce. Seeks rebuild deterministically.
-- **Swaps and stingers**: a program swap crossfades at a frame, beat, bar,
-  or section boundary — a rejected target keeps the last valid program
-  running. Stingers load at schedule time (never on the render path).
-- **Metrics**: frames rendered, commands executed/dropped, max queue depth,
-  swaps, stingers — read off the audio callback with no formatting or
-  allocation on it.
-- **Replay**: `start_capture`/`stop_capture` records timestamped commands;
-  replaying them reproduces the take bit-for-bit.
-
-How far ahead should a host schedule? The queue executes at exact frames in
-the rendered stream, so the only requirement is that commands arrive before
-the render reaches them — schedule at least one pump quantum (plus the ring
-depth, for split/threaded use) ahead of the musical point; anything more is
-free.
-
-Python gets the same surface as `tono.Performance` — live (speaker) or
-`headless=True` for tests and servers (`.fill(frames)` renders manually),
-with `tono.next_bar()`-style scheduling helpers.
-
-## Where it runs
+## Ship it anywhere
 
 `tono-core` is pure (no I/O, no transport — apart from the opt-in `sampler`
-feature, which reads `.sf2` files by path) and compiles to native and
-game targets — so one patch plays identically in the studio and the shipped game.
+feature, which reads `.sf2` files by path) and compiles to native and game
+targets — so one patch plays identically in the studio and the shipped game.
