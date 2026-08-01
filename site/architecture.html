@@ -216,7 +216,7 @@
   <h1>From one node to a game soundtrack</h1>
   <p class="lede">tono has exactly one primitive — a <strong>node</strong> that evaluates to a
   signal — and one design rule: every layer above it (patches, instruments, songs, compiled
-  programs, adaptive music, the desktop studio, the Python, C, and WASM faces) must
+  programs, adaptive music, the desktop studio, and the Python face) must
   <em>compile down</em> to nodes rather than invent its own audio path. Understand the smallest
   unit and how it composes, and the whole codebase reads as variations on one idea. Four durable
   objects carry it: a <strong>Song</strong> composes, a <strong>SoundDoc</strong> renders, a
@@ -321,7 +321,7 @@
       <p>One trait, one method: <em>fill this interleaved-stereo buffer</em>. It is to playback
       what Node is to authoring. Engine, Mixer, Instrument, AdaptiveMusic, Performance, the
       streaming renderer — every live object implements it, every output adapter (cpal via
-      <code>tono-play::Speaker</code>, the AudioWorklet in <code>tono-wasm</code>) consumes it.
+      <code>tono-play::Speaker</code>) consumes it.
       This seam is why the pure core never links a sound card.</p>
       <pre><code>pub trait AudioSource {
     fn fill(&amp;mut self, out: &amp;mut [f32]) -&gt; usize;  <span class="c">// L,R,L,R… whole buffer, every call</span>
@@ -396,7 +396,7 @@ Song + Patches + assets ──► validate: every problem in one  ──►   di
                             Program — the immutable artifact (rung 8)
                                     ▼
                             Engine — the same bundle runs on every face:
-                            native runtime · Python · WASM (AudioWorklet) · C ABI</code></pre>
+                            native runtime · Python</code></pre>
 
   <h3>three version pins, three clocks</h3>
   <p>A Program records three revisions that evolve independently, so no upgrade is ever silent.
@@ -433,9 +433,8 @@ song host   ──►  <span class="a">runtime</span>: Performance (rung 9) — 
   <p>Cargo workspace: a virtual root manifest; the CLI, the engine and the faces
   live under <code>crates/</code>. Everything but the CLI and tono-core is <strong>off the default
   build</strong> — <code>make verify</code> compiles only those two; <code>make
-  verify-native</code> gates the native faces, <code>make capi</code> / <code>make wasm</code>
-  the C ABI and the browser build. Row labels below are the ladder rungs each module group
-  implements.</p>
+  verify-native</code> gates the native faces. Row labels below are the
+  ladder rungs each module group implements.</p>
 
   <div class="diagram">
     <div class="diagram-inner">
@@ -461,18 +460,8 @@ song host   ──►  <span class="a">runtime</span>: Performance (rung 9) — 
           <span class="role">PyO3 bindings: typed Song → Program → Performance, numpy</span>
           <span class="run">make python</span>
         </div>
-        <div class="box">
-          <span class="name">tono-capi</span>
-          <span class="role">C ABI: opaque handles over Program + Performance, capi.h</span>
-          <span class="run">make capi</span>
-        </div>
-        <div class="box">
-          <span class="name">tono-wasm</span>
-          <span class="role">browser: renderDoc / compileSong / PerformanceHandle + AudioWorklet</span>
-          <span class="run">make wasm</span>
-        </div>
       </div>
-      <div class="flow-arrow">│ all six depend on ▼ (tono-desktop/py stream through tono-play's Speaker; capi/wasm wrap a Program + Performance)</div>
+      <div class="flow-arrow">│ all four depend on ▼ (tono-desktop/py stream through tono-play's Speaker)</div>
       <div class="core">
         <div class="core-title">crates/tono-core <span>— the pure engine. No I/O, no transport, no cpal. Deterministic compute only.</span></div>
         <div class="core-rows">
@@ -633,7 +622,6 @@ make verify-native   <span class="c"># tono-desktop / tono-play / tono-py + all 
         <tr><td>write music in code</td><td><code>song/</code> (tracks / patterns / buses + the pattern algebra) + <code>music.rs</code> (harmony) + <code>catalog.rs</code> — compiles to a Program</td></tr>
         <tr><td>adaptive game music</td><td><code>adaptive/</code> — intensity stems, beat-quantized transitions, stingers, ducking</td></tr>
         <tr><td>cross-platform byte-identity</td><td><code>det.rs</code> — documents stamped <code>engine: 5</code> share one pin set on every target; <code>dsp.rs</code> dispatches on the doc's engine</td></tr>
-        <tr><td>embed in C or the browser</td><td><code>crates/tono-capi</code> (opaque handles + hand-written <code>capi.h</code>) · <code>crates/tono-wasm</code> (wasm-bindgen API + the AudioWorklet in <code>js/</code>)</td></tr>
         <tr><td>speaker output in Rust</td><td><code>tono-play::Speaker</code> — the one cpal shim; desktop and py stream through it too</td></tr>
         <tr><td>analyze / grade a render</td><td><code>analysis.rs</code> (numbers + images), <code>review.rs</code> (pass/warn/fail against an archetype)</td></tr>
         <tr><td>understand any workflow</td><td><code>Makefile</code> — every action is a make target; RULE.md is the contributor brief</td></tr>
@@ -642,7 +630,7 @@ make verify-native   <span class="c"># tono-desktop / tono-play / tono-py + all 
   </div>
 
   <div class="footer">
-    tono v1.10.0 · workspace: tono (CLI) · tono-core · tono-play · tono-desktop · tono-py · tono-capi · tono-wasm ·
+    tono v1.10.0 · workspace: tono (CLI) · tono-core · tono-play · tono-desktop · tono-py ·
     gates: <span class="mono">make verify</span> + <span class="mono">make verify-native</span> ·
     reference: <a href="https://github.com/marmikshah/tono/blob/master/docs/cookbook.md">cookbook</a>, <a href="https://github.com/marmikshah/tono/blob/master/docs/runtime.md">runtime.md</a> · <a href="index.html">← back to the showcase</a>
   </div>

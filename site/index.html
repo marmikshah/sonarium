@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tono — music as code, byte-identical everywhere</title>
-<meta name="description" content="A deterministic music-as-code engine: compose typed songs in Rust or Python, compile once into a hashed Program, render offline or run it live with sample-accurate scheduling. Engine revision 5 — byte-identical across platforms. CLI + C ABI + WASM.">
+<meta name="description" content="A deterministic music-as-code engine: compose typed songs in Rust or Python, compile once into a hashed Program, render offline or run it live with sample-accurate scheduling. Engine revision 5 — byte-identical across platforms.">
 <link rel="icon" href="img/logo.png">
 <style>
   :root {
@@ -170,10 +170,6 @@ outro = program.render_range(bars=(6, 8))   <span class="c"># a slice of the mix
       <td>the engine as a library, embedded in a game or tool</td></tr>
     <tr><td>Python</td><td><a href="https://github.com/marmikshah/tono/tree/master/crates/tono-py">build with maturin</a></td>
       <td>typed songs, numpy renders, live <code>Performance</code></td></tr>
-    <tr><td>C ABI</td><td><a href="https://github.com/marmikshah/tono/tree/master/crates/tono-capi">tono-capi</a></td>
-      <td>opaque handles over a Program and its runtime, for any native host</td></tr>
-    <tr><td>WASM</td><td><a href="https://github.com/marmikshah/tono/tree/master/crates/tono-wasm">tono-wasm</a></td>
-      <td>the engine in the browser — compile songs, play them from an AudioWorklet</td></tr>
     <tr><td>Desktop</td><td><a href="https://github.com/marmikshah/tono/tree/master/crates/tono-desktop">tono-desktop</a></td>
       <td>the pattern-station studio — a step grid over the catalog, live audio</td></tr>
     <tr><td>Playground</td><td><a href="https://github.com/marmikshah/tono/tree/master/crates/tono-play">tono-play</a></td>

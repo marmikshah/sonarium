@@ -4,7 +4,7 @@ name: CI
 # (-D warnings) + tests) — the exact thing the pre-push hook runs, so a
 # pushed head has already proven it locally. Runs on non-draft PRs and on
 # master. Everything heavier (macOS native crates, Python wheel smoke,
-# benches, the wasm build) is validated on master pushes via their own
+# benches) is validated on master pushes via their own
 # workflows, not per-PR — hosted minutes are spent where they change
 # outcomes.
 

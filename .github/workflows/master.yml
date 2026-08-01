@@ -29,19 +29,3 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Verify on latest stable
         run: make ci
-
-  build-wasm:
-    # The WASM face: build-only (no browser tests). Compiling tono-core +
-    # tono-wasm to the supported wasm32 target covers core/runtime changes
-    # for the browser face. Master pushes only — the PR gate is the single
-    # `ci` job.
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - name: Build the WASM face
-        run: cargo build --locked -p tono-wasm --target wasm32-unknown-unknown

@@ -6,7 +6,7 @@
 BIN     := target/release/tono
 
 .DEFAULT_GOAL := help
-.PHONY: help build build-opt install desktop python wheel python-test python-smoke capi wasm test bench fmt lint check pre-commit-checks ci verify verify-native site version hooks clean
+.PHONY: help build build-opt install desktop python wheel python-test python-smoke test bench fmt lint check pre-commit-checks ci verify verify-native site version hooks clean
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -41,31 +41,6 @@ python-smoke: ## Build the extension as a wheel, install it, run the smoke + typ
 	python3 -m pip install --no-index --find-links dist --force-reinstall --no-deps tono
 	python3 crates/tono-py/tests/smoke.py
 	python3 crates/tono-py/tests/test_typed.py
-
-capi: ## Build the C ABI (tono-capi) and run the C smoke test against its staticlib — off the default build
-	cargo build -p tono-capi --examples
-	target/debug/examples/emit_program > target/capi-smoke.program.json
-	$(CC) -std=c11 -Wall -Wextra -Werror -I crates/tono-capi crates/tono-capi/tests/smoke.c target/debug/libtono_capi.a -o target/capi-smoke
-	target/capi-smoke target/capi-smoke.program.json
-
-WASM_CRATE := crates/tono-wasm
-WASM_OUT   := target/wasm32-unknown-unknown/release/tono_wasm.wasm
-
-wasm: ## Build the WASM face (tono-wasm) → crates/tono-wasm/pkg — off the default build; runs wasm-bindgen when the CLI is installed, else prints the exact command
-	@rustup target list --installed | grep -qx wasm32-unknown-unknown || \
-		{ echo "→ adding the wasm32-unknown-unknown target"; rustup target add wasm32-unknown-unknown; }
-	cargo build -p tono-wasm --target wasm32-unknown-unknown --release
-	@if command -v wasm-bindgen >/dev/null 2>&1; then \
-		wasm-bindgen --target web --out-dir $(WASM_CRATE)/pkg $(WASM_OUT); \
-		echo "→ bindings in $(WASM_CRATE)/pkg — try the player:"; \
-		echo "    cd $(WASM_CRATE) && python3 -m http.server 8000  # → http://localhost:8000/js/example.html"; \
-	else \
-		V=$$(sed -n '/^name = "wasm-bindgen"/{n;s/^version = "\([^"]*\)"/\1/p;}' Cargo.lock | head -1); \
-		echo "→ built $(WASM_OUT)"; \
-		echo "  wasm-bindgen-cli not found — install the version the crate was built with, then:"; \
-		echo "    cargo install wasm-bindgen-cli --version $$V"; \
-		echo "    wasm-bindgen --target web --out-dir $(WASM_CRATE)/pkg $(WASM_OUT)"; \
-	fi
 
 test: ## Run the test suite
 	cargo test --locked

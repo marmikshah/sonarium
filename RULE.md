@@ -54,17 +54,6 @@ The root is a pure virtual workspace manifest; every package lives under
   Excluded from `default-members`/CI; built via `make python` / `make wheel`,
   smoke-tested by `make python-test`. Build-from-source only — never published to
   PyPI (the name is taken).
-- **`crates/tono-capi/`** — the stable C ABI for native hosts (issue #52):
-  opaque handles over a compiled `Program` and its `Performance` runtime,
-  cdylib + staticlib artifacts, a hand-written `capi.h`, and a C smoke test.
-  Excluded from `default-members`/CI; built and smoke-tested via `make capi`.
-- **`crates/tono-wasm/`** — the WebAssembly face for the browser (issue #52):
-  the lean engine (`tono-core` with default features off — no analysis PNGs,
-  no sampler) as a wasm32 cdylib behind a `wasm-bindgen` API (`renderDoc` /
-  `compileSong` / `Program` / `PerformanceHandle`), an AudioWorklet runtime
-  (`js/`), and a player example. Excluded from `default-members`; built via
-  `make wasm`, build-gated in CI (the `build-wasm` job in ci.yml).
-
 ## The invariant that matters
 
 Rendering is a pure function of `(graph, seed, sample_rate)` → **byte-identical**
@@ -98,8 +87,6 @@ renders forever.
   them (they are non-default workspace members). CI runs it via the Native
   workflow when those crates change.
 - `make desktop` — the native desktop studio (heavy deps, off the default build).
-- `make capi` / `make wasm` — the C ABI and the browser face (off the default
-  build; wasm32 builds are also gated by the `build-wasm` job in CI).
 - `make hooks` — install the git hooks (`.githooks/pre-commit`, `pre-push`).
 
 ## Release checklist

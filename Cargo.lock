@@ -4339,14 +4339,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tono-capi"
-version = "1.10.0"
-dependencies = [
- "serde_json",
- "tono-core",
-]
-
-[[package]]
 name = "tono-core"
 version = "1.10.0"
 dependencies = [
@@ -4395,17 +4387,6 @@ dependencies = [
  "serde_json",
  "tono-core",
  "tono-play",
-]
-
-[[package]]
-name = "tono-wasm"
-version = "1.10.0"
-dependencies = [
- "js-sys",
- "serde",
- "serde_json",
- "tono-core",
- "wasm-bindgen",
 ]
 
 [[package]]

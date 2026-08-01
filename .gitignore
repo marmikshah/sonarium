@@ -13,9 +13,6 @@
 __pycache__/
 /crates/tono-py/python/tono/_tono*.so
 
-# Generated wasm-bindgen output (`make wasm` regenerates it).
-/crates/tono-wasm/pkg/
-
 # Local-only notes kept out of the repo
 /docs/architecture.html
 /docs/ROADMAP.md
