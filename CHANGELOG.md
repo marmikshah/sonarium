@@ -8,9 +8,9 @@ render the mix or stems offline, and run the same Program through a
 sample-accurate scheduled runtime — all byte-identical, everywhere. Engine
 revision 5 retires the per-platform determinism limitation: documents stamped
 `engine: 5` render bit-for-bit on every supported target (older revisions are
-untouched forever). The faces multiply: a typed Python API with py.typed and
-wheels, a stable C ABI, a WASM + AudioWorklet runtime, prebuilt CLI binaries,
-and the typed Song/Pattern/Program/Performance API frozen stable as of rc.1 —
+untouched forever). The faces multiply: a typed Python API with py.typed and wheels, prebuilt
+CLI binaries, and the typed Song/Pattern/Program/Performance API frozen
+stable as of rc.1 —
 see docs/release-gates.md for the full gate walk and docs/migration.md to
 move existing work forward.
 
@@ -33,6 +33,12 @@ move existing work forward.
   project — the pipeline stays validated but manual-only
   (`workflow_dispatch`), and the crate README says so plainly. Prebuilt
   wheels come back if users ask for them.
+- **The C ABI and WASM faces are out of scope for now.** Both shipped
+  during the beta slices (stable `extern "C"` surface + C smoke test;
+  wasm-bindgen API + AudioWorklet runtime, byte-identical to the offline
+  bounce) and were dropped before release as overkill — native hosts
+  embed `tono-core` directly. They can return on demand; the release
+  gate in docs/release-gates.md records the decision.
 - **House structure and contributor contract aligned.** The CLI package
   moved to `crates/tono-cli` (the root is a pure virtual workspace
   manifest; the `tono` crate name and publish path are unchanged), and the
@@ -102,29 +108,6 @@ move existing work forward.
 - **Prebuilt CLI binaries** — every release tag builds `tono` for
   linux-x86_64, macos-aarch64, and windows-x86_64 with sha256 sidecars,
   uploaded to the GitHub Release.
-- **The tono C ABI (`tono-capi`)** (beta.1, issue #52): a stable `extern "C"`
-  surface for native hosts — validate a SoundDoc, load a compiled Program
-  bundle, render it to stereo, and run it through a Performance
-  (schedule/fill/metrics) behind opaque handles, with a thread-local
-  last-error string and a small JSON grammar for scheduled commands
-  (`{"play":true}` at `{"next_bar":true}`, …). Ships a hand-written `capi.h`
-  and a C smoke test; built cdylib + staticlib via `make capi`, off the
-  default build like tono-play.
-- **The WASM face (`tono-wasm`)** (beta.1, issue #52): the lean engine
-  (`tono-core` with default features off — no analysis PNGs, no SoundFont
-  sampler, which has no filesystem in a browser; sampler tracks render
-  silence as in a native lean build) compiled to `wasm32-unknown-unknown`
-  behind a `wasm-bindgen` API — `renderDoc`, `compileSong` (throws the
-  compile diagnostics as a JSON array), `Program` (hash/frames/rate/
-  streamability, stereo-interleaved `render()`, `renderStems()`,
-  `toJson`/`fromJson`), and `play() → PerformanceHandle` with
-  `schedule(commandJson, atJson)` speaking the same JSON grammar as the C
-  ABI, `fill(frames)`, `state()`, `positionBeats()`, `metricsJson()`. Ships
-  an AudioWorklet runtime (`js/tono-worklet.js` + the `js/tono.js` ES-module
-  wrapper — vanilla JS, no bundler) and a player example (`js/example.html`,
-  WAV download + live playback, not an editor). Built via `make wasm`;
-  build-gated in CI (`build-wasm` job). Live `fill` is pinned byte-identical
-  to the offline bounce by the crate's tests.
 - **`Transport` — the sample-accurate musical clock** (alpha.3,
   experimental): position in frames with exact conversions to beats and
   bars through the program's tempo/meter maps and pickup (the same shared

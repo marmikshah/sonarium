@@ -240,7 +240,7 @@ The Rust crates install from crates.io; the Python extension
 [builds from source](crates/tono-py/README.md). More:
 [embedding & patches](docs/runtime.md) · [API docs](https://docs.rs/tono-core).
 
-## One engine, seven faces
+## One engine, five faces
 
 Every face renders the same audio byte-identically:
 
@@ -249,10 +249,6 @@ Every face renders the same audio byte-identically:
 - **Rust library** — `cargo add tono-core` — the engine embedded in a game or tool.
 - **Python** — typed songs, programs, and live playback with numpy;
   [build from source](crates/tono-py).
-- **C ABI** — `tono-capi` — opaque handles over a compiled Program and its
-  runtime, for any native host.
-- **WASM** — `tono-wasm` — the engine in the browser behind a
-  `wasm-bindgen` API and an AudioWorklet player.
 - **Pattern station** — a Tauri studio: a step grid over catalog instruments,
   live audio, undo — [build](crates/tono-desktop).
 - **Playground** — hear Rust snippets through the speakers —

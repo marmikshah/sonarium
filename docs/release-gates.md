@@ -90,19 +90,22 @@ This file is the freeze checklist: rc.1 ships when every row is ✅.
 - ✅ **Wheels and CLI binaries install and execute on clean environments** —
   the Wheels workflow smokes each wheel on a clean venv (numpy only) on
   all three platforms; CLI binaries build per-tag with sha256 sidecars.
-- ✅ **WASM and C ABI smoke tests load and execute a compiled Program** —
-  `make capi` (C smoke: validate/load/render/schedule/fill/metrics) and
-  the headless Node smoke against the compiled `.wasm` (full API,
-  byte-identity); WASM builds in CI (`build-wasm` job).
+- ⛔ ~~WASM and C ABI smoke tests load and execute a compiled Program~~ —
+  **descoped by owner decision before release**: the `tono-capi` and
+  `tono-wasm` faces were built and smoke-tested during the beta slices
+  (C smoke + headless Node smoke, byte-identical), then dropped as
+  overkill — native hosts embed `tono-core` directly. The gate returns
+  if the faces do.
 - ✅ **Release artifacts include hashes and capability metadata** — sha256
   sidecars for binaries and wheels on the GitHub Release; Programs carry
   target + capabilities (`tono compile --inspect`).
 
 ## Engineering
 
-- ✅ **Required CI green and risk-routed** — CI (pinned toolchain +
-  stable-compat, ubuntu+macOS), Native, Python, Bench (report-only),
-  Audit, build-wasm; path-filtered where heavy.
+- ✅ **Required CI green and risk-routed** — one-job PR gate (`make ci`,
+  ubuntu, draft-gated); Native (macOS), Python, Bench (report-only),
+  Audit, and stable-compat validated on master pushes; path-filtered
+  where heavy.
 - ✅ **Golden, property, compatibility, Python-equivalence, and
   runtime-safety suites pass** — golden corpus, fuzz_validation +
   fuzz_bundle + fuzz_command_stream + fuzz_pattern_properties + fuzz_midi
