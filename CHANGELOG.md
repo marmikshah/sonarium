@@ -44,6 +44,17 @@ move existing work forward.
   two findings ride as dated, reviewable exemptions in `.repo-policy.toml`
   (the committed lockfile — required for reproducible shipped-binary
   builds — and the Python tests living with their package).
+- **User docs, revamped for scanning.** README leads with the
+  compose → compile → run story; quickstart is a five-step card flow; the
+  cookbook gained a complete node-vocabulary reference (delay, flanger,
+  phaser included — they were undocumented) with every topic compressed to
+  tables and caption-tagged recipes; runtime/migration/performance docs are
+  Before/After and tables; all seven crate/face READMEs and the landing
+  page follow the same code-first style. Fact fixes along the way:
+  `.stats.json` layer field names, the streaming claims (v2 tracks roots
+  stream natively), the Instrument capability list, migration's
+  `bpm`/song-level `seed` names, the frames-estimate formula, and the
+  README's broken `.hit()` chain.
 
 ### Deferred
 - **Opus export** — evaluated for alpha.2 and deferred to the portability

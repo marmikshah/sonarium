@@ -1,15 +1,16 @@
-# Performance reference budgets (rc.1)
+# Performance: the reference budgets (rc.1)
 
 What "within the documented reference budgets" means for tono, and how the
-numbers are produced. The benches live in `crates/tono-core/benches/render.rs`
-(criterion); the report-only **Bench** CI workflow runs them on
-core-touching PRs and publishes the results — **no per-commit gate**, by
-design: shared CI runners are too noisy for hard thresholds. These budgets
-are the reference those reports are read against; a sustained 2× regression
-on any of them is a release blocker, a few percent is runner weather.
+numbers are produced:
 
-Reference numbers measured on Apple Silicon (macOS-aarch64, release); CI
-numbers differ in absolute terms and track in relative ones.
+- Benches live in `crates/tono-core/benches/render.rs` (criterion).
+- The report-only **Bench** CI workflow runs them on core-touching PRs and
+  publishes the results — **no per-commit gate**, by design: shared CI
+  runners are too noisy for hard thresholds.
+- Read reports against the budgets below: a sustained 2× regression on any
+  of them is a release blocker; a few percent is runner weather.
+- Reference numbers measured on Apple Silicon (macOS-aarch64, release); CI
+  numbers differ in absolute terms and track in relative ones.
 
 | Bench | What it measures | rc.1 reference |
 |---|---|---|
@@ -22,37 +23,42 @@ numbers differ in absolute terms and track in relative ones.
 | `scheduling/performance_fill_512` | one 512-frame block through `Performance::fill` | ~19 µs |
 | `mixing/tracks_stems_8` | `render_stems` on an 8-track mix with a bus | ~72 ms |
 
-## The real-time headroom that matters
+## Check the real-time headroom
 
-The scheduling numbers are the runtime story: a 512-frame block at 48 kHz
-lasts **10.7 ms** of wall time; `Performance::fill` renders it in **~19 µs**
-(~0.2% of block time), and the full streaming render of the same block is
-**~0.89 ms** (~8%). The command-queue and voice budgets are static and
-documented (4096 scheduled commands, estimates-driven preallocation), so the
-engine never draws on more than its headroom under legal load — the soak
-(tests/soak.rs, on-demand) proves it end to end with zero engine-originated
-underruns.
-
-Offline render cost is dominated by content, not the framework: a piano
-second is ~8.8 ms (~113× real time), a wet FX chain ~1.9 ms, an 8-track
-stem decomposition ~72 ms — all comfortably inside authoring-loop latency.
+- A 512-frame block at 48 kHz lasts **10.7 ms** of wall time.
+- `Performance::fill` renders it in **~19 µs** (~0.2% of block time); the
+  full streaming render of the same block is **~0.89 ms** (~8%).
+- The command-queue and voice budgets are static and documented (4096
+  scheduled commands, estimates-driven preallocation), so the engine never
+  draws on more than its headroom under legal load.
+- The soak (`tests/soak.rs`, on-demand) proves it end to end with zero
+  engine-originated underruns.
+- Offline render cost is dominated by content, not the framework: a piano
+  second is ~8.8 ms (~113× real time), a wet FX chain ~1.9 ms, an 8-track
+  stem decomposition ~72 ms — all comfortably inside authoring-loop
+  latency.
 
 ## The engine-5 premium, documented and accepted
 
-The deterministic kernels (`det`) are pure f64 polynomial evaluation, so
-transcendental-heavy micro-renders pay a measured premium over platform
-libm (the blip bench sits ~2× its pre-engine-5 baseline; the wet FX chain
-~1.4×). This is the price of **cross-platform byte-identity**, and it is
-accepted deliberately: it applies only to documents stamped `engine: 5`
-(older revisions keep their libm paths and their old numbers), the premium
-is bounded by the table above, and no bench crosses its budget because of
-it. Engine ≤ 4 paths are byte- and speed-identical to before.
+- The deterministic kernels (`det`) are pure f64 polynomial evaluation, so
+  transcendental-heavy micro-renders pay a measured premium over platform
+  libm: the blip bench sits ~2× its pre-engine-5 baseline, the wet FX chain
+  ~1.4×.
+- This is the price of **cross-platform byte-identity**, accepted
+  deliberately: it applies only to documents stamped `engine: 5` — older
+  revisions keep their libm paths and their old numbers.
+- The premium is bounded by the table above; no bench crosses its budget
+  because of it. Engine ≤ 4 paths are byte- and speed-identical to before.
 
-## Memory budgets
+## Bound memory at compile time
 
-Compile-time estimates bound the runtime: `estimates.frames` (exact render
-length, `round(duration × sample_rate)` with the +1-ceil branch pinned),
-`estimates.memory_bytes` = frames × 8 (the stereo f32 output), and
-`peak_voices` (per-track max overlap summed — a voice-pool size that never
-steals). The estimates test (tests/estimates.rs) proves the bounds against
-real renders.
+Compile-time estimates bound the runtime:
+
+- `estimates.frames` — the exact render length,
+  `round(duration × sample_rate)`.
+- `estimates.memory_bytes` — `frames × 8` (the stereo f32 output).
+- `peak_voices` — per-track max overlap summed: a voice-pool size that
+  never steals.
+
+The estimates test (`tests/estimates.rs`) proves the bounds against real
+renders.

@@ -496,8 +496,9 @@ pub enum Node {
     /// bank is N parallel resonators — cheap, stable, deterministic. Use it as
     /// a chain stage after an excitation: `chain[ impact, modal ]`. The
     /// excitation's brightness lights the modes; the modes' frequencies and
-    /// decays define the timbre. Author modes explicitly — the cookbook lists
-    /// frequency/decay tables for common materials to copy and tune.
+    /// decays define the timbre. Author modes explicitly — the cookbook's
+    /// struck-bodies guidance (harmonic vs off-harmonic ratios, short vs long
+    /// decays) is the map from material to mode list.
     Modal {
         /// The resonant partials (1..=64). Each is a damped sine.
         modes: Vec<Mode>,
