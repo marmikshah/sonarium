@@ -85,6 +85,11 @@ move existing work forward.
   sources now build at schedule time (the same discipline stingers already
   had), keyed by the command's seq and replayed swaps included; the new
   `rt_alloc` gate proves zero allocations across a swap.
+- **Two RustSec advisories in `pyo3`** — RUSTSEC-2026-0176 (out-of-bounds
+  read in `PyList`/`PyTuple` iterator `nth`) and RUSTSEC-2026-0177
+  (missing `Sync` bound on `PyCFunction::new_closure` closures), both in
+  pyo3 0.28.3. tono-py now builds on pyo3 + numpy 0.29, and
+  `cargo deny check advisories` is green again.
 - **Two contract violations found by the new proptest suite**, each pinned by
   a regression test: a tracks automation lane with exactly one point whose
   time is NaN (or any single-point lane at `sample_rate` 0) indexed past the
