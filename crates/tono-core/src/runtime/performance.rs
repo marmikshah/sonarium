@@ -254,6 +254,10 @@ pub struct Performance {
     song: SongSource,
     transport: Transport,
     queue: VecDeque<TimestampedCommand>,
+    /// Program sources pre-built at schedule time, keyed by the command's
+    /// seq — the build (a full probe render or bounce) never happens on the
+    /// audio path (same discipline as stinger pre-rendering).
+    swap_sources: std::collections::HashMap<u64, SongSource>,
     clock: u64,
     seq: u64,
     master_gain: f32,
@@ -285,6 +289,7 @@ impl Performance {
             song,
             transport,
             queue: VecDeque::with_capacity(COMMAND_QUEUE_CAP.min(64)),
+            swap_sources: std::collections::HashMap::new(),
             clock: 0,
             seq: 0,
             master_gain: 1.0,
@@ -385,6 +390,12 @@ impl Performance {
             seq: self.seq,
             command,
         };
+        // Swap sources build HERE, at schedule time (a full probe render or
+        // bounce — O(duration)), never inside `fill` (see execute).
+        if let Command::Swap(program) = &stamped.command {
+            self.swap_sources
+                .insert(stamped.seq, SongSource::build(program));
+        }
         // Ordered by (frame, seq): stable append since frames are usually
         // non-decreasing; insert to keep the deque sorted regardless.
         let pos = self
@@ -485,13 +496,18 @@ impl Performance {
         }
         for c in commands {
             // Bypass capture (a replay isn't a new session) and the queue cap
-            // is respected: a captured queue always fits again.
+            // is respected: a captured queue always fits again. Swap sources
+            // build here too — replay IS schedule time.
             let frame = c.at_frame;
             if self.queue.len() >= COMMAND_QUEUE_CAP {
                 self.metrics.commands_dropped += 1;
                 continue;
             }
             self.seq += 1;
+            if let Command::Swap(program) = &c.command {
+                self.swap_sources
+                    .insert(self.seq, SongSource::build(program));
+            }
             self.queue.push_back(TimestampedCommand {
                 at_frame: frame,
                 seq: self.seq,
@@ -568,12 +584,17 @@ impl Performance {
                 self.gain_ramp = Some((from, self.master_gain, GAIN_RAMP_FRAMES));
             }
             Command::Swap(program) => {
-                let outgoing = std::mem::replace(&mut self.song, SongSource::build(&program));
-                self.fade = Some((outgoing, SWAP_FADE_FRAMES));
-                self.transport = Transport::for_program(&program.meta);
-                self.transport.play();
-                self.program = program;
-                self.metrics.swaps += 1;
+                // The source was pre-built at schedule time (off the audio
+                // path); a foreign id (a hand-built command that never went
+                // through schedule) is inert, like a foreign stinger.
+                if let Some(new_source) = self.swap_sources.remove(&stamped.seq) {
+                    let outgoing = std::mem::replace(&mut self.song, new_source);
+                    self.fade = Some((outgoing, SWAP_FADE_FRAMES));
+                    self.transport = Transport::for_program(&program.meta);
+                    self.transport.play();
+                    self.program = program;
+                    self.metrics.swaps += 1;
+                }
             }
             Command::Stinger { patch, gain } => {
                 // A foreign patch id (a capture replayed into a Performance
