@@ -90,11 +90,21 @@ const LN2_HI: f64 = 6.93147180369123816490e-01;
 const LN2_LO: f64 = 1.90821492927058770002e-10;
 const INV_LN2: f64 = std::f64::consts::LOG2_E;
 
-/// 2^k as an exact f64 (bit-constructed; k clamped to the normal range —
-/// our envelopes saturate long before either end).
+/// 2^k as an exact f64 (bit-constructed). `y·2^k` with y ∈ [1, 2) overflows
+/// for k > 1023 (⇒ inf, matching libm) and is subnormal-or-zero for
+/// k < -1023 — a power-of-two subnormal down to 2⁻¹⁰⁷⁴, zero below.
 #[inline]
 fn ldexp2(k: i64) -> f64 {
-    let k = k.clamp(-1022, 1023);
+    if k > 1023 {
+        return f64::INFINITY;
+    }
+    if k < -1023 {
+        if k < -1074 {
+            return 0.0;
+        }
+        // A power of two is exact even subnormal: one mantissa bit.
+        return f64::from_bits(1u64 << (k + 1074));
+    }
     f64::from_bits(((k + 1023) as u64) << 52)
 }
 
@@ -440,6 +450,29 @@ mod tests {
         assert!(e < 2e-14, "exp rel error {e}");
         assert_eq!(exp(0.0), 1.0);
         assert_eq!(exp(1.0), 2.7182818284590455);
+    }
+
+    #[test]
+    fn exp_overflow_is_inf() {
+        assert_eq!(exp(710.0), f64::INFINITY);
+        assert_eq!(exp(730.0), f64::INFINITY);
+        assert_eq!(exp(1e10), f64::INFINITY);
+    }
+
+    #[test]
+    fn exp_underflow_subnormal_or_zero() {
+        // k < -1023 lands in the subnormal range: the result must stay on the
+        // subnormal scale (never jump back to a normal-magnitude value).
+        let v = exp(-744.9);
+        assert!((0.0..1e-300).contains(&v), "exp(-744.9) = {v:e}");
+        let libm = (-744.9f64).exp();
+        let subnormal_ulp = f64::from_bits(1);
+        assert!(
+            (v - libm).abs() <= 4.0 * subnormal_ulp,
+            "exp(-744.9): det {v:e} vs libm {libm:e}"
+        );
+        assert_eq!(exp(-800.0), 0.0);
+        assert_eq!(exp(-1e10), 0.0);
     }
 
     #[test]
