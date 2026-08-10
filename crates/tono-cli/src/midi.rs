@@ -49,10 +49,11 @@ pub fn export_midi(doc: &SoundDoc, dest: &Path) -> Result<MidiSummary> {
         );
     }
     let mut smf = Smf::new(Header::new(Format::Parallel, Timing::Metrical(PPQ.into())));
-    let us_per_qn = (60_000_000.0 / seqs[0].bpm.max(1.0)) as u32;
+    let global_bpm = seqs[0].bpm.max(1.0);
+    let us_per_qn = (60_000_000.0 / global_bpm) as u32;
     let mut total = 0usize;
     for (i, s) in seqs.iter().enumerate() {
-        let (track, n) = seq_track(s, (i == 0).then_some(us_per_qn));
+        let (track, n) = seq_track(s, (i == 0).then_some(us_per_qn), global_bpm);
         total += n;
         smf.tracks.push(track);
     }
@@ -84,13 +85,18 @@ fn collect_seqs<'a>(node: &'a Node, out: &mut Vec<SeqRef<'a>>) {
 }
 
 /// Build one MIDI track from a seq. `tempo` (if `Some`) writes the global tempo.
-fn seq_track(s: &SeqRef, tempo: Option<u32>) -> (Track<'static>, usize) {
+/// `global_bpm` is the file's single tempo: a seq at any other bpm is retimed
+/// so its notes keep their ABSOLUTE time (tick = step × PPQ × global/seq bpm
+/// ÷ steps-per-beat), not their grid position.
+fn seq_track(s: &SeqRef, tempo: Option<u32>, global_bpm: f32) -> (Track<'static>, usize) {
     // Ticks from the absolute step, rounded per event — a truncated per-step
     // tick count would drift cumulatively for steps_per_beat values that do
     // not divide the PPQ (e.g. septuplets). Clamped to the MIDI u28 max: a
     // pathological step would otherwise wrap the wire format's delta times.
+    let retime = (global_bpm / s.bpm.max(1e-6)) as f64;
     let tick = |step: u32| {
-        ((step as u64 * PPQ as u64 + s.spb as u64 / 2) / s.spb as u64).min(0x0FFF_FFFF) as u32
+        ((step as f64 * PPQ as f64 * retime / s.spb as f64 + 0.5).floor() as u64).min(0x0FFF_FFFF)
+            as u32
     };
     // (absolute tick, is_note_on, key, velocity). Note-offs sort before
     // note-ons at the same tick so a zero-length gap re-strikes cleanly.
@@ -566,6 +572,50 @@ mod tests {
         )
         .unwrap();
         assert!(export_midi(&doc, std::path::Path::new("/tmp/none.mid")).is_err());
+    }
+
+    #[test]
+    fn multi_tempo_seqs_are_retimed_to_the_global_tempo() {
+        // One file, one tempo (the first seq's 120 bpm): the 60 bpm seq's
+        // notes must keep their ABSOLUTE time — its beat (step 4) is one full
+        // second, i.e. two quarter notes at the file tempo = tick 960, not 480.
+        let doc: SoundDoc = serde_json::from_str(
+            r#"{ "name":"mt", "duration":4.0, "version":2, "root":{ "type":"tracks",
+              "tracks":[
+                { "id":"a", "node": { "type":"seq", "bpm":120, "steps_per_beat":4,
+                    "wave":"square", "env":{"s":1},
+                    "notes":[ {"step":4,"len":1,"pitch":"C4"} ] } },
+                { "id":"b", "node": { "type":"seq", "bpm":60, "steps_per_beat":4,
+                    "wave":"square", "env":{"s":1},
+                    "notes":[ {"step":4,"len":1,"pitch":"E4"} ] } }
+              ] } }"#,
+        )
+        .unwrap();
+        let dir = std::env::temp_dir().join("tono-midi-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mt.mid");
+        export_midi(&doc, &path).unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        let smf = Smf::parse(&bytes).unwrap();
+        let first_on_at = |ti: usize| {
+            let mut at = 0u32;
+            for e in &smf.tracks[ti] {
+                at += u32::from(e.delta);
+                if matches!(
+                    e.kind,
+                    TrackEventKind::Midi {
+                        message: MidiMessage::NoteOn { .. },
+                        ..
+                    }
+                ) {
+                    return at;
+                }
+            }
+            panic!("track {ti} has no note-on");
+        };
+        assert_eq!(first_on_at(0), 480, "the 120 bpm seq keeps the grid");
+        assert_eq!(first_on_at(1), 960, "the 60 bpm seq is retimed, not slowed");
     }
 
     #[test]
