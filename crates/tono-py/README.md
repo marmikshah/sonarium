@@ -41,9 +41,12 @@ audio = program.render()                    # np.float32, shape (frames, 2), L/R
 - `Voice` builders chain: `.gain(..).pan(..).reverb(..).swing(..).humanize(..)`.
 - `program.save(path)` / `tono.Program.load(path)` ship the hashed bundle.
 - Runnable examples: [`examples/night_drive.py`](examples/night_drive.py)
-  (compose → compile → live `Performance`) and
+  (compose → compile → live `Performance`),
   [`examples/golden_hour.py`](examples/golden_hour.py) (a produced 16-bar
-  track — compiles, renders, and bounces `golden_hour.wav` you can play).
+  track — compiles, renders, and bounces `golden_hour.wav` you can play), and
+  [`examples/fur_elise.py`](examples/fur_elise.py) (Beethoven's bagatelle on
+  the sampled grand — 3/8 meter map with a pickup, a tempo-map ritardando,
+  per-note dynamics).
 
 ## Run it live
 
