@@ -47,8 +47,8 @@
 //! The lean build is pure compute (serde + rustfft for the convolve node's FFT
 //! convolution); the heavy deps are optional, behind features (both on by
 //! default): `analysis` pulls in image for [`analysis`]/[`review`] PNGs, and
-//! `sampler` pulls in rustysynth for the SoundFont sampler instrument. So the same core compiles to a native binary, a WASM
-//! playground, or a lean in-engine runtime. The `tono render` CLI, audio-file
+//! `sampler` pulls in rustysynth for the SoundFont sampler instrument. So the
+//! same core compiles to a native binary or a lean in-engine runtime. The `tono render` CLI, audio-file
 //! encoders, and MIDI export live in the `tono` shell crate that depends on this one.
 //!
 //! Longer-form guides: the [cookbook] (the node vocabulary + recipes) and the
@@ -63,7 +63,7 @@ pub mod adaptive;
 #[cfg(feature = "analysis")]
 pub mod analysis;
 pub mod catalog;
-pub mod det;
+pub(crate) mod det;
 pub mod diag;
 pub mod drumkit;
 pub mod dsl;

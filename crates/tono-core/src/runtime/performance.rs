@@ -84,8 +84,10 @@ pub enum Command {
     /// Fire a one-shot over the song (already rendered — the render happened
     /// at schedule time, never on the render path).
     Stinger {
-        /// The pre-rendered stinger's id, issued by [`Performance::stinger`].
-        patch: super::PatchId,
+        /// The pre-rendered interleaved stereo samples. Owning the buffer in
+        /// the command makes captures self-contained and releases it when no
+        /// queued, captured, or active stinger refers to it.
+        samples: Arc<[f32]>,
         /// The stinger's gain.
         gain: f32,
     },
@@ -240,7 +242,7 @@ impl SongSource {
 /// allocator (capacity is reserved when the stinger is scheduled).
 struct ActiveStinger {
     /// The interleaved stereo buffer, rendered at the program's sample rate.
-    buf: Arc<Vec<f32>>,
+    buf: Arc<[f32]>,
     /// Play head in samples (frames × 2).
     pos: usize,
     /// The declick ramp: 1.0 → the scheduled gain over 2 ms (the same shape
@@ -266,8 +268,6 @@ pub struct Performance {
     metrics: PerformanceMetrics,
     capture: Option<Vec<TimestampedCommand>>,
     sample_rate: u32,
-    /// Stingers rendered at schedule time, indexed by their `PatchId`.
-    stinger_bufs: Vec<Arc<Vec<f32>>>,
     /// Stingers sounding now (pre-reserved at schedule time).
     stingers: Vec<ActiveStinger>,
     scratch_l: Vec<f32>,
@@ -298,7 +298,6 @@ impl Performance {
             metrics: PerformanceMetrics::default(),
             capture: None,
             sample_rate: sr,
-            stinger_bufs: Vec::new(),
             stingers: Vec::new(),
             scratch_l: vec![0.0; SCRATCH_FRAMES],
             scratch_r: vec![0.0; SCRATCH_FRAMES],
@@ -343,15 +342,16 @@ impl Performance {
         Ok(match at {
             At::Immediate => self.clock,
             At::Frame(f) => *f,
-            At::Beat(b) => self.transport.frame_at_beat(*b),
-            At::Bar(b) => self.transport.frame_at_bar(*b),
+            At::Beat(b) => self.deadline_for_transport_frame(self.transport.frame_at_beat(*b)),
+            At::Bar(b) => self.deadline_for_transport_frame(self.transport.frame_at_bar(*b)),
             At::NextBeat => {
                 let pos = self.transport.position_beats();
-                self.transport.frame_at_beat(pos.floor() + 1.0)
+                self.deadline_for_transport_frame(self.transport.frame_at_beat(pos.floor() + 1.0))
             }
-            At::NextBar => self
-                .transport
-                .frame_at_bar(self.transport.position_bars().floor() as u32 + 1),
+            At::NextBar => self.deadline_for_transport_frame(
+                self.transport
+                    .frame_at_bar(self.transport.position_bars().floor() as u32 + 1),
+            ),
             At::Marker(name) => {
                 let marker = self
                     .program
@@ -360,7 +360,7 @@ impl Performance {
                     .iter()
                     .find(|m| &m.name == name)
                     .ok_or_else(|| PerformanceError::UnknownPosition(name.clone()))?;
-                self.transport.frame_at_beat(marker.at.to_f64())
+                self.deadline_for_transport_frame(self.transport.frame_at_beat(marker.at.to_f64()))
             }
             At::Section(name) => {
                 let section = self
@@ -370,20 +370,39 @@ impl Performance {
                     .iter()
                     .find(|s| &s.name == name)
                     .ok_or_else(|| PerformanceError::UnknownPosition(name.clone()))?;
-                self.transport.frame_at_bar(section.bar)
+                self.deadline_for_transport_frame(self.transport.frame_at_bar(section.bar))
             }
         })
     }
 
-    /// Schedule a command at `at`. Musical positions resolve to exact frames
-    /// now; identical frames execute in submission order. A full queue
-    /// rejects the command (counted in the metrics).
-    pub fn schedule(&mut self, command: Command, at: At) -> Result<u64, PerformanceError> {
-        let frame = self.resolve(&at)?;
-        if self.queue.len() >= COMMAND_QUEUE_CAP {
-            self.metrics.commands_dropped += 1;
-            return Err(PerformanceError::QueueFull);
+    /// Map a song-timeline frame to the render clock used by the queue. Seeks,
+    /// pauses, loops, and swaps let those clocks diverge, so musical positions
+    /// are distances from the current playhead rather than raw song frames.
+    fn deadline_for_transport_frame(&self, target: u64) -> u64 {
+        let position = self.transport.position_frames();
+        let distance = if target >= position {
+            target - position
+        } else if let Some((start, end)) = self.transport.loop_range()
+            && (start..end).contains(&target)
+            && position < end
+        {
+            (end - position).saturating_add(target - start)
+        } else {
+            0
+        };
+        self.clock.saturating_add(distance)
+    }
+
+    fn require_queue_room(&mut self) -> Result<(), PerformanceError> {
+        if self.queue.len() < COMMAND_QUEUE_CAP {
+            return Ok(());
         }
+        self.metrics.commands_dropped += 1;
+        Err(PerformanceError::QueueFull)
+    }
+
+    fn enqueue(&mut self, command: Command, frame: u64) -> u64 {
+        debug_assert!(self.queue.len() < COMMAND_QUEUE_CAP);
         self.seq += 1;
         let stamped = TimestampedCommand {
             at_frame: frame,
@@ -396,8 +415,6 @@ impl Performance {
             self.swap_sources
                 .insert(stamped.seq, SongSource::build(program));
         }
-        // Ordered by (frame, seq): stable append since frames are usually
-        // non-decreasing; insert to keep the deque sorted regardless.
         let pos = self
             .queue
             .iter()
@@ -408,13 +425,24 @@ impl Performance {
         }
         self.queue.insert(pos, stamped);
         self.metrics.queue_depth_max = self.metrics.queue_depth_max.max(self.queue.len());
-        Ok(self.seq)
+        self.seq
+    }
+
+    /// Schedule a command at `at`. Musical positions resolve to exact frames
+    /// now; identical frames execute in submission order. A full queue
+    /// rejects the command (counted in the metrics).
+    pub fn schedule(&mut self, command: Command, at: At) -> Result<u64, PerformanceError> {
+        let frame = self.resolve(&at)?;
+        self.require_queue_room()?;
+        Ok(self.enqueue(command, frame))
     }
 
     /// Schedule a stinger: render the doc NOW — the fire inside [`fill`](AudioSource::fill)
     /// then only mixes a pre-rendered buffer, so the render path never
     /// renders or allocates at fire time — and fire it at `at` with `gain`.
     pub fn stinger(&mut self, doc: &SoundDoc, gain: f32, at: At) -> Result<u64, PerformanceError> {
+        let frame = self.resolve(&at)?;
+        self.require_queue_room()?;
         // Stingers render at the program's rate: the runtime's one internal
         // rate (resampling to the device belongs at the adapter).
         let mut doc = doc.clone();
@@ -425,8 +453,7 @@ impl Performance {
             buf.push(left[i]);
             buf.push(right[i]);
         }
-        let patch = super::PatchId(self.stinger_bufs.len());
-        self.stinger_bufs.push(Arc::new(buf));
+        let samples: Arc<[f32]> = buf.into();
         // Pre-reserve voice room for every queued stinger (including this
         // one): the fire then never grows the Vec on the render path.
         let pending = self
@@ -436,7 +463,7 @@ impl Performance {
             .count()
             + 1;
         self.stingers.reserve(pending);
-        self.schedule(Command::Stinger { patch, gain }, at)
+        Ok(self.enqueue(Command::Stinger { samples, gain }, frame))
     }
 
     /// Schedule a program swap (crossfaded at `at`). The target must load
@@ -450,10 +477,18 @@ impl Performance {
                 crate::program::PROGRAM_VERSION
             )));
         }
-        if program.hash != crate::program::content_hash(&program.doc) {
+        if program.hash != program.computed_hash() {
             return Err(PerformanceError::BadProgram(
                 "hash mismatch — the program was edited after compilation".into(),
             ));
+        }
+        if program.meta.sample_rate != self.sample_rate
+            || program.doc.sample_rate != self.sample_rate
+        {
+            return Err(PerformanceError::BadProgram(format!(
+                "sample rate mismatch — performance is {} Hz, program metadata is {} Hz, and its document is {} Hz",
+                self.sample_rate, program.meta.sample_rate, program.doc.sample_rate
+            )));
         }
         self.schedule(Command::Swap(program), at)
     }
@@ -467,10 +502,21 @@ impl Performance {
         if !self.program.meta.sections.iter().any(|s| s.name == name) {
             return Err(PerformanceError::UnknownPosition(name.to_string()));
         }
+        let frame = self.resolve(&at)?;
         // Drop pending section seeks; executed ones are history.
+        let replaced: Vec<u64> = self
+            .queue
+            .iter()
+            .filter(|c| matches!(c.command, Command::SeekSection(_)))
+            .map(|c| c.seq)
+            .collect();
         self.queue
             .retain(|c| !matches!(c.command, Command::SeekSection(_)));
-        self.schedule(Command::SeekSection(name.to_string()), at)
+        if let Some(capture) = &mut self.capture {
+            capture.retain(|c| !replaced.contains(&c.seq));
+        }
+        self.require_queue_room()?;
+        Ok(self.enqueue(Command::SeekSection(name.to_string()), frame))
     }
 
     /// Start recording scheduled commands for deterministic replay.
@@ -538,13 +584,13 @@ impl Performance {
         } else {
             self.transport.clear_loop();
         }
-        self.transport.seek_frame(snapshot.position);
         match snapshot.state {
             TransportState::Stopped => self.transport.stop(),
             TransportState::Playing => self.transport.play(),
             TransportState::Paused => self.transport.pause(),
         }
-        self.song.seek(snapshot.position as usize);
+        self.transport.seek_frame(snapshot.position);
+        self.song.seek(self.transport.position_frames() as usize);
     }
 
     /// Execute one command (at its exact frame).
@@ -596,18 +642,14 @@ impl Performance {
                     self.metrics.swaps += 1;
                 }
             }
-            Command::Stinger { patch, gain } => {
-                // A foreign patch id (a capture replayed into a Performance
-                // that never scheduled the stinger) is inert, never a panic.
-                if let Some(buf) = self.stinger_bufs.get(patch.0) {
-                    let mut ramp = Ramp::new(1.0);
-                    ramp.set(gain.max(0.0), Tween::ms(2.0, self.sample_rate));
-                    self.stingers.push(ActiveStinger {
-                        buf: buf.clone(),
-                        pos: 0,
-                        gain: ramp,
-                    });
-                }
+            Command::Stinger { samples, gain } => {
+                let mut ramp = Ramp::new(1.0);
+                ramp.set(gain.max(0.0), Tween::ms(2.0, self.sample_rate));
+                self.stingers.push(ActiveStinger {
+                    buf: samples,
+                    pos: 0,
+                    gain: ramp,
+                });
                 self.metrics.stingers_fired += 1;
             }
         }
@@ -831,6 +873,28 @@ mod tests {
         Arc::new(song.compile(&CompileOptions::default()).unwrap())
     }
 
+    fn other_program_at(sample_rate: u32) -> Arc<Program> {
+        let mut song = Song::new("perf-other-rate", 100.0);
+        song.add_track("lead", SeqWave::Square, amp());
+        song.tracks[0].notes.push(note(0, 16, "A4"));
+        Arc::new(
+            song.compile(&CompileOptions {
+                sample_rate: Some(sample_rate),
+                ..CompileOptions::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    fn stinger_doc() -> SoundDoc {
+        serde_json::from_str(
+            r#"{ "name": "blip", "duration": 0.2, "root": { "type": "mul", "inputs": [
+                { "type": "sawtooth", "freq": 880 },
+                { "type": "env", "a": 0.0, "d": 0.05, "s": 0.0, "r": 0.01 } ] } }"#,
+        )
+        .unwrap()
+    }
+
     fn bounce_interleaved(program: &Program) -> Vec<f32> {
         let (l, r) = program.render_stereo();
         let mut out = Vec::with_capacity(l.len() * 2);
@@ -958,12 +1022,7 @@ mod tests {
     #[test]
     fn stinger_fires_on_the_exact_beat() {
         let program = demo_program();
-        let stinger: SoundDoc = serde_json::from_str(
-            r#"{ "name": "blip", "duration": 0.2, "root": { "type": "mul", "inputs": [
-                { "type": "sawtooth", "freq": 880 },
-                { "type": "env", "a": 0.0, "d": 0.05, "s": 0.0, "r": 0.01 } ] } }"#,
-        )
-        .unwrap();
+        let stinger = stinger_doc();
         // Beat 4 at 120 BPM = 2 s = frame 88 200 at 44 100.
         let at = {
             let t = Transport::for_program(&program.meta);
@@ -1038,6 +1097,49 @@ mod tests {
     }
 
     #[test]
+    fn captured_stinger_replays_on_a_fresh_performance() {
+        let program = demo_program();
+        let mut p = Performance::new(program.clone());
+        p.start_capture();
+        p.schedule(Command::Play, At::Immediate).unwrap();
+        p.stinger(&stinger_doc(), 0.75, At::Frame(1_000)).unwrap();
+        let captured = p.stop_capture();
+        let take_a = fill_all(&mut p, 12_000, 333);
+
+        let mut q = Performance::new(program);
+        q.replay(&captured);
+        let take_b = fill_all(&mut q, 12_000, 512);
+        assert_eq!(bits(&take_a), bits(&take_b));
+        assert_eq!(q.metrics().stingers_fired, 1);
+    }
+
+    #[test]
+    fn musical_deadlines_are_relative_to_the_current_transport() {
+        let mut p = Performance::new(demo_program());
+        p.schedule(Command::Play, At::Immediate).unwrap();
+        fill_all(&mut p, 1_000, 512);
+        p.schedule(Command::Pause, At::Immediate).unwrap();
+        fill_all(&mut p, 5_000, 512);
+        assert_eq!(p.clock(), 6_000);
+        assert_eq!(p.transport().position_frames(), 1_000);
+
+        let next_beat = p.transport().frame_at_beat(1.0);
+        p.schedule(Command::SetGain(0.5), At::NextBeat).unwrap();
+        let queued = p.queue.back().unwrap();
+        assert_eq!(queued.at_frame, 6_000 + next_beat - 1_000);
+    }
+
+    #[test]
+    fn swap_rejects_a_different_sample_rate_in_core() {
+        let mut p = Performance::new(demo_program());
+        let err = p
+            .swap_to(other_program_at(48_000), At::Immediate)
+            .unwrap_err();
+        assert!(matches!(err, PerformanceError::BadProgram(_)));
+        assert_eq!(p.program().meta.sample_rate, 44_100);
+    }
+
+    #[test]
     fn a_full_queue_rejects_and_counts() {
         let mut p = Performance::new(demo_program());
         for i in 0..COMMAND_QUEUE_CAP {
@@ -1064,6 +1166,13 @@ mod tests {
             bits(&take_b),
             "the snapshot replays the position"
         );
+
+        let mut stopped = Performance::new(demo_program());
+        stopped.transport.seek_frame(12_345);
+        let snap = stopped.snapshot();
+        stopped.apply_snapshot(&snap);
+        assert_eq!(stopped.transport.state(), TransportState::Stopped);
+        assert_eq!(stopped.transport.position_frames(), 12_345);
     }
 
     #[test]

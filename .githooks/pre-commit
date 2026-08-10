@@ -1,7 +1,5 @@
 #!/bin/sh
-# Pre-commit gate: the non-mutating lint checks (format + clippy), so a commit
-# can't land unformatted or with warnings. It just calls the Makefile target, so
-# the gate lives in exactly one place. Enable once per clone with:
-#   git config core.hooksPath .githooks   (or: make hooks)
+# Pre-commit gate: the repository's non-mutating Rust lint checks.
 set -e
-exec make pre-commit-checks
+cargo fmt --all -- --check
+exec cargo clippy --locked --all-targets -- -D warnings

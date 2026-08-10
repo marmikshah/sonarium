@@ -214,7 +214,7 @@ impl Transport {
         if self.state != TransportState::Playing {
             return Advance {
                 wrapped: false,
-                finished: true,
+                finished: false,
             };
         }
         let mut pos = self.position.saturating_add(frames);
@@ -307,14 +307,14 @@ mod tests {
     fn play_pause_stop_seek() {
         let mut t = mapped_transport();
         assert_eq!(t.state(), TransportState::Stopped);
-        t.advance(100);
+        assert!(!t.advance(100).finished);
         assert_eq!(t.position_frames(), 0, "stopped transport doesn't advance");
         t.play();
         let a = t.advance(48_000);
         assert!(!a.finished && !a.wrapped);
         assert_eq!(t.position_frames(), 48_000);
         t.pause();
-        t.advance(48_000);
+        assert!(!t.advance(48_000).finished);
         assert_eq!(t.position_frames(), 48_000, "paused holds");
         t.seek_bar(1);
         assert_eq!(t.position_frames(), 96_000);

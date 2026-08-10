@@ -226,14 +226,14 @@ impl Pitch {
     /// The pitch with MIDI number `midi` (0..=127 — the upper half of `u8`
     /// is an error, not a wrap).
     pub fn from_midi(midi: u8) -> Result<Pitch, MusicError> {
-        Self::from_midi_i16(midi as i16)
+        Self::from_midi_i32(midi as i32)
     }
 
     /// The pitch of `class` in `octave` (scientific pitch notation: octave 4
     /// contains middle C). `midi = (octave + 1) × 12 + class`; anything
     /// outside 0..=127 is an error — never a clamp.
     pub fn new(class: PitchClass, octave: i8) -> Result<Pitch, MusicError> {
-        Self::from_midi_i16((octave as i16 + 1) * 12 + class.0 as i16)
+        Self::from_midi_i32((octave as i32 + 1) * 12 + class.0 as i32)
     }
 
     /// Parse a pitch name, STRICTLY: a [`PitchClass`] name plus a signed
@@ -245,7 +245,7 @@ impl Pitch {
         let expected = r#"a note name like "C4", "F#3", "Gb5", or "midi:60""#;
         if let Some(num) = name.strip_prefix("midi:") {
             let midi: i16 = num.parse().map_err(|_| bad_name("pitch", name, expected))?;
-            return Self::from_midi_i16(midi);
+            return Self::from_midi_i32(midi as i32);
         }
         let bytes = name.as_bytes();
         let Some((&letter, mut rest)) = bytes.split_first() else {
@@ -275,7 +275,7 @@ impl Pitch {
             .ok_or_else(|| bad_name("pitch", name, expected))?;
         // Enharmonic edges (Cb4, B#3) land on the neighbouring class through
         // the same midi formula, so no special case is needed.
-        Self::from_midi_i16((octave as i16 + 1) * 12 + semis)
+        Self::from_midi_i32((octave as i32 + 1) * 12 + semis as i32)
     }
 
     /// The MIDI note number, 0..=127.
@@ -310,13 +310,13 @@ impl Pitch {
     /// The pitch `semitones` away (negative descends), erroring outside
     /// 0..=127 — transposition never wraps or clamps.
     pub fn add_semitones(&self, semitones: i16) -> Result<Pitch, MusicError> {
-        Self::from_midi_i16(self.0 as i16 + semitones)
+        Self::from_midi_i32(self.0 as i32 + semitones as i32)
     }
 
     /// The pitch of MIDI number `midi`, or an out-of-range error naming the
     /// span. Shared by every constructor so the bounds live in exactly one
     /// place.
-    fn from_midi_i16(midi: i16) -> Result<Pitch, MusicError> {
+    fn from_midi_i32(midi: i32) -> Result<Pitch, MusicError> {
         if (0..=127).contains(&midi) {
             Ok(Pitch(midi as u8))
         } else {
@@ -453,8 +453,12 @@ impl Scale {
         }
         let steps = self.intervals();
         let index = (n - 1) as usize;
-        let octaves = (index / steps.len()) as i16 * 12;
-        Ok(Interval::new(steps[index % steps.len()] as i16 + octaves))
+        let octaves = (index / steps.len()) as i64 * 12;
+        let semitones = steps[index % steps.len()] as i64 + octaves;
+        let semitones = i16::try_from(semitones).map_err(|_| {
+            MusicError::OutOfRange(format!("scale degree {n} is too large for an interval"))
+        })?;
+        Ok(Interval::new(semitones))
     }
 
     /// The pitch classes of the scale built on `tonic`, ascending from the
@@ -770,7 +774,7 @@ impl Voicing {
         if bass_midi >= root {
             bass_midi -= 12;
         }
-        let bass = Pitch::from_midi_i16(bass_midi)?;
+        let bass = Pitch::from_midi_i32(bass_midi as i32)?;
         let mut pitches = vec![bass];
         pitches.extend_from_slice(&close);
         Voicing::checked(pitches)
@@ -1034,6 +1038,8 @@ mod tests {
         // The top and bottom of the range are hard errors, never wraps.
         assert!(pitch("G9").transpose(Interval::MINOR_SECOND).is_err());
         assert!(pitch("C-1").add_semitones(-1).is_err());
+        assert!(pitch("G9").add_semitones(i16::MAX).is_err());
+        assert!(pitch("C-1").add_semitones(i16::MIN).is_err());
     }
 
     #[test]
@@ -1087,6 +1093,7 @@ mod tests {
         assert_eq!(Scale::Major.degree(9).unwrap().semitones(), 14);
         assert_eq!(Scale::MajorPentatonic.degree(6).unwrap(), Interval::OCTAVE);
         assert_eq!(Scale::Major.degree(0), Err(MusicError::BadDegree(0)));
+        assert!(Scale::Major.degree(u32::MAX).is_err());
     }
 
     #[test]

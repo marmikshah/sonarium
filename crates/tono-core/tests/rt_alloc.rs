@@ -265,7 +265,13 @@ fn other_program() -> Arc<tono_core::program::Program> {
     let mut song = Song::new("rt-alloc-other", 100.0);
     song.add_track("lead", SeqWave::Square, amp());
     song.tracks[0].notes.push(note(0, 16, "A4"));
-    Arc::new(song.compile(&CompileOptions::default()).expect("compiles"))
+    Arc::new(
+        song.compile(&CompileOptions {
+            sample_rate: Some(48_000),
+            ..CompileOptions::default()
+        })
+        .expect("compiles"),
+    )
 }
 
 #[test]

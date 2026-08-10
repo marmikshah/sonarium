@@ -21,7 +21,7 @@ move existing work forward.
   algebra, the `music` harmony types, `Song::compile` → `Program`,
   `Transport`/`Performance`, and the typed Python API — is **stable as of
   1.10.0-rc.1** (docs/api-tiers.md). Frozen with it: the document schema
-  (SCHEMA_VERSION 2), the Program bundle format (PROGRAM_VERSION 1), and
+  (SCHEMA_VERSION 2), the Program bundle format (PROGRAM_VERSION 2), and
   the DSP engine (ENGINE_VERSION 5). From here to v1.10.0, release-blocking
   fixes only.
 - **Selected-range rendering**: `Program::render_range_frames` /
@@ -42,14 +42,11 @@ move existing work forward.
 - **House structure and contributor contract aligned.** The CLI package
   moved to `crates/tono-cli` (the root is a pure virtual workspace
   manifest; the `tono` crate name and publish path are unchanged), and the
-  repo follows the portfolio contributor standard: `RULE.md` is the one
-  rule surface (the core principle: *Less is more. Explicit is always
-  better than implicit.* — CLAUDE.md is retired into it), `make ci` is the
-  one portable gate the pre-push hook and hosted CI both run, PR CI is a
-  single draft-gated job (heavier faces validate on master pushes), and
-  two findings ride as dated, reviewable exemptions in `.repo-policy.toml`
-  (the committed lockfile — required for reproducible shipped-binary
-  builds — and the Python tests living with their package).
+  repository has one self-contained contributor surface: `RULE.md` (the core
+  principle: *Less is more. Explicit is always better than implicit.*).
+  Direct Cargo commands are the portable gates
+  used by hooks and hosted CI, and the same CI runner builds and tests an
+  installed Python wheel when core or binding inputs change.
 - **User docs, revamped for scanning.** README leads with the
   compose → compile → run story; quickstart is a five-step card flow; the
   cookbook gained a complete node-vocabulary reference (delay, flanger,
@@ -210,10 +207,11 @@ move existing work forward.
   Program carries the resolved document, the musical metadata a transport
   needs (tempo, grid, bars, duration in seconds and frames, a track roster
   with stable declaration-order ids), bounded resource estimates (frames,
-  events, peak voices, memory), streaming blockers as warnings, and a
-  canonical content hash (FNV-1a over sorted-key JSON) that an equivalent
+  events, peak voices, memory), streaming blockers as offline warnings or
+  runtime-target errors, and a
+  canonical semantic hash (FNV-1a over sorted-key JSON) that an equivalent
   song reproduces from Rust or Python. Programs serialize as versioned
-  bundles (`PROGRAM_VERSION` 1, independent of the schema/engine pins);
+  bundles (`PROGRAM_VERSION` 2, independent of the schema/engine pins);
   loading rejects a newer revision and re-verifies the hash — never
   recompiles. Architecture decisions and the stable/experimental/internal
   API tiers are recorded in `docs/adr/` and `docs/api-tiers.md`.
@@ -241,12 +239,11 @@ move existing work forward.
   the machine-readable summary (hash, version pins, roster, estimates,
   warnings) and writes nothing. A failing compile exits non-zero, so it
   doubles as a CI gate for song projects.
-- **Criterion benchmarks + proptest validation fuzzing** — `make bench`
+- **Criterion benchmarks + proptest validation fuzzing** — `cargo bench -p tono-core`
   runs five criterion benches over the render hot path (osc/env, a tracks
-  mix, a piano seq, an FX chain, streaming fill), and the report-only
-  `Bench` CI workflow runs them on core-touching PRs and publishes the
-  numbers (no gate: shared runners are too noisy for a hard threshold, so a
-  regression is made visible rather than blocked). `tests/fuzz_validation.rs`
+  mix, a piano seq, an FX chain, streaming fill), and CI can run them by
+  explicit manual dispatch and publish the numbers (no gate: shared runners
+  are too noisy for a hard threshold). `tests/fuzz_validation.rs`
   property-tests the crate contract: parse/validate never panics, a validated
   doc renders finite samples, an unvalidated (poisoned) doc still can't panic
   the renderer, and `mutate` always re-validates.
@@ -709,7 +706,7 @@ on the one deterministic core, with the MCP face unchanged.
   (volume rides, pan moves), linearly interpolated. A track with no automation
   stays on the constant fast path, so every existing document renders
   **byte-identically**; tests pin a constant-lane-equals-static invariant and a
-  ramp that provably fades. Settable by an agent through the existing graph tools
+  ramp that provably fades. Settable by a caller through the existing graph tools
   (`set_param` / `edit_sound` / `refine_sound`), and drawn in a lane editor in
   the playground mixer.
 
@@ -719,12 +716,12 @@ on the one deterministic core, with the MCP face unchanged.
 
 ### Repo standards
 - Engineering-standards pass: `LICENSE` (dual MIT/Apache), `.editorconfig`,
-  `CLAUDE.md`, `.env.example`, a `pre-commit` hook, and the canonical Makefile
+  the contributor guide, `.env.example`, a `pre-commit` hook, and the canonical Makefile
   targets; default branch is `master`; the committed WASM is built with
   `--remap-path-prefix` so it carries no build-machine paths.
 
 ### Tool surface consolidation (30 → 23)
-- **Op-based merges** for the admin clusters, so the agent picks from a smaller,
+- **Op-based merges** for the admin clusters, so the client picks from a smaller,
   cleaner surface: `history { id, op: status|undo|redo }` (was undo_sound /
   redo_sound / history); `layer { id, op: add|set|remove|duplicate, … }` (was
   add_layer / set_layer / layer_ops); `bank { op: create|add|list, … }` (was
@@ -753,9 +750,9 @@ on the one deterministic core, with the MCP face unchanged.
   offset / mute), and the serial processors between the mixer and `OUT` become
   the master chain — i.e. a `tracks` document. The patch serializes to a
   `SoundDoc` (serial effect runs auto-fold into a `chain`) and renders live
-  to audio plus the same spectrogram / waveform / analysis an agent sees,
+  to audio plus the same spectrogram / waveform / analysis the author sees,
   **byte-identically to the native engine**; a two-way JSON drawer exposes the
-  exact document an agent edits. The SoundFont sampler voice is the only one
+  exact document the author edits. The SoundFont sampler voice is the only one
   unavailable in the browser.
 - **In-memory analysis** — `analysis::stats` (numbers, no filesystem) and
   `spectrogram_png` / `waveform_png` (PNG bytes) split out of the disk-writing
@@ -821,7 +818,7 @@ on the one deterministic core, with the MCP face unchanged.
 - **New `scaffold_layered_sfx { base_freq?, seed?, name? }` tool** — generates a
   blank, band-disciplined 4-layer SFX document (sub / body / top / transient),
   each a mixer layer with a stable id, a band-splitting filter, a one-shot
-  envelope, and a starting gain. Sources are neutral placeholders the agent
+  envelope, and a starting gain. Sources are neutral placeholders the author
   swaps out: a correct multi-layer *structure*, not a preset. Stamped schema v2
   (independent per-layer noise) + the current engine; journaled and replayable.
   New CI-replayed example `docs/examples/layered-sfx-scaffold.json`.
@@ -892,7 +889,7 @@ semantics, and replay byte-for-byte.
 
 ## 1.0.0 — 2026-06-07
 
-First release. A headless sound studio for AI agents, driven over MCP.
+First release. A headless sound studio for programmatic clients, driven over MCP.
 
 ### Instruments & synthesis
 - Polyphonic sequencer (`seq`) with a core instrument set: **piano** (detuned
@@ -916,13 +913,13 @@ First release. A headless sound studio for AI agents, driven over MCP.
 - Output stage: LUFS-targeted soft-knee limiting to a true-peak ceiling;
   seamless loops (equal-power crossfade + WAV `smpl` chunk); WAV/FLAC/OGG.
 
-### The agent loop
+### The authoring loop
 - Every render returns analysis (peak/true-peak/RMS/crest, ≈LUFS, spectral
   centroid, transients) plus **spectrogram and waveform images**;
   `compare_sounds` reports deltas + similarity.
 - Surgical editing by JSON path (`describe_sound` → `set_param` /
   `edit_sound`), 20-deep undo/redo, persistent slug-id library.
-- Variations on agent-made sounds: `mutate_sound`, `generate_variants`,
+- Variations on authored sounds: `mutate_sound`, `generate_variants`,
   `humanize`, `morph_sounds`.
 - Banks → `sounds.json` manifests + engine files (Godot/Unity/Bevy).
 

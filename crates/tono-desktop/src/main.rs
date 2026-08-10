@@ -5,7 +5,8 @@
 //! hear it on the next block; every edit is undoable; the project saves as an
 //! ordinary tono [`Song`](tono_core::song::Song) wrapped with its grid rows.
 //!
-//! Not part of the default build or CI; built only via `make desktop`.
+//! Not part of the default build; build with
+//! `cargo build -p tono-desktop --release`.
 //! (Headless preview lives in tono-play: `tono_play::play_doc` picks the
 //! byte-identical streaming path when it can.)
 //!

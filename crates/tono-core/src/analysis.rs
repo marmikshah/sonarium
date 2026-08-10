@@ -1,7 +1,7 @@
 //! Audio analysis: level/spectral stats, a spectrogram PNG, and a waveform PNG.
 //!
-//! This is what gives the agent "ears": after every render it reads these
-//! numbers and views the images, then refines the graph.
+//! After every render, a caller can read these numbers and inspect the images
+//! before refining the graph.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -73,7 +73,7 @@ pub struct Analysis {
     /// Filesystem path to the rendered spectrogram PNG.
     pub spectrogram_png_path: String,
     /// Filesystem path to the rendered waveform / amplitude-envelope PNG (so the
-    /// agent can SEE the time-domain shape: attack, decay, double-triggers).
+    /// author can inspect the time-domain shape: attack, decay, double-triggers).
     pub waveform_png_path: String,
 }
 

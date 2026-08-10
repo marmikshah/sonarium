@@ -1,6 +1,5 @@
-# Supply-chain policy (issue #52, WS9): checked by the Audit workflow —
-# dependency licenses against this allowlist, and the RustSec advisory
-# database against the committed lockfile.
+# Supply-chain policy (issue #52, WS9): checked in CI and locally with
+# `cargo deny check advisories licenses`.
 
 [licenses]
 # The tono dependency tree is permissively licensed; anything outside this
@@ -15,7 +14,6 @@ allow = [
     "Zlib",
     "CC0-1.0",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "MPL-2.0",
     "Unlicense",
 ]

@@ -108,7 +108,7 @@ tono-core = "1"
 use std::collections::BTreeMap;
 use tono_core::patch::Patch;
 
-// Load a patch shipped with your game (authored in the studio / by an agent).
+// Load a patch shipped with your game (authored in the studio or another tool).
 let patch: Patch = serde_json::from_str(include_str!("../assets/impact.patch.json"))?;
 
 // On each collision, render a unique hit from the contact parameters.
@@ -145,7 +145,7 @@ fn on_collision(patch: &Patch, force: f32, object_size: f32) -> Vec<f32> {
 - One parameter can drive several paths at once (here `size` rings every
   modal partial longer).
 - Paths are the same ones `tono_core::edit::describe` / `apply_ops` use, so
-  an agent can design the sound in the studio, read off the paths, and emit
+  a tool can design the sound in the studio, read off the paths, and emit
   the patch.
 - Worked example:
   [`docs/examples/parametric-impact.patch.json`](examples/parametric-impact.patch.json).

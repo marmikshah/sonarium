@@ -10,7 +10,7 @@
 //!
 //! Documents are short (0.3–0.5 s) so the whole suite runs in a couple of
 //! minutes, and each doc is built ONCE outside the measured closure. Run with
-//! `make bench` (report-only — not part of `make verify`).
+//! `cargo bench -p tono-core` (report-only — not part of the test gate).
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;

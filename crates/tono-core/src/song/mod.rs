@@ -21,6 +21,8 @@
 //! ```
 
 mod compile;
+mod diagnostics;
+mod estimate;
 mod pattern;
 mod phrase;
 

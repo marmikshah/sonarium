@@ -31,7 +31,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Assemble the site
-        run: make site
+        run: |
+          mkdir -p _site/audio _site/img
+          cp site/index.html site/architecture.html _site/
+          cp docs/examples/audio/*.mp4 _site/audio/
+          cp docs/logo.png docs/logo-wordmark.png docs/river-flows-spectrogram.png _site/img/
       - uses: actions/upload-pages-artifact@v4
         with:
           path: _site

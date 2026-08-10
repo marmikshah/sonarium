@@ -6,7 +6,7 @@
 //! Engine revision 5 (ADR 0001) routes every transcendental in the
 //! byte-pinned render paths ([`crate::render`], [`crate::streaming`]) through
 //! the engine-dispatching wrappers below, which select the deterministic
-//! [`crate::det`] kernels over platform libm. The measurement and authoring
+//! `crate::det` kernels over platform libm. The measurement and authoring
 //! surface — [`crate::analysis`], `instrument/`, `adaptive/`, `vary.rs`,
 //! `song/pattern.rs`, `music.rs` — deliberately stays on platform libm: it
 //! is not part of the byte-identity promise.
@@ -127,7 +127,7 @@ pub(crate) const CHORUS_SWING_SECS: f32 = 0.010;
 pub(crate) const FLANGER_BASE_SECS: f32 = 0.0025;
 pub(crate) const FLANGER_SWING_SECS: f32 = 0.002;
 
-/// Engine-dispatched sine: [`crate::det::sinf`] for engine ≥ 5, platform libm
+/// Engine-dispatched sine: `crate::det::sinf` for engine ≥ 5, platform libm
 /// below (ADR 0001) — the one dispatch every render-path sine goes through.
 #[inline]
 pub fn sin(x: f32, engine: u32) -> f32 {
@@ -138,7 +138,7 @@ pub fn sin(x: f32, engine: u32) -> f32 {
     }
 }
 
-/// Engine-dispatched cosine: [`crate::det::cosf`] for engine ≥ 5, platform
+/// Engine-dispatched cosine: `crate::det::cosf` for engine ≥ 5, platform
 /// libm below (ADR 0001).
 #[inline]
 pub fn cos(x: f32, engine: u32) -> f32 {
@@ -161,7 +161,7 @@ pub fn sin_cos(x: f32, engine: u32) -> (f32, f32) {
     }
 }
 
-/// Engine-dispatched exponential: [`crate::det::expf`] for engine ≥ 5,
+/// Engine-dispatched exponential: `crate::det::expf` for engine ≥ 5,
 /// platform libm below (ADR 0001).
 #[inline]
 pub fn exp(x: f32, engine: u32) -> f32 {
@@ -172,7 +172,7 @@ pub fn exp(x: f32, engine: u32) -> f32 {
     }
 }
 
-/// Engine-dispatched natural log: [`crate::det::lnf`] for engine ≥ 5,
+/// Engine-dispatched natural log: `crate::det::lnf` for engine ≥ 5,
 /// platform libm below (ADR 0001).
 #[inline]
 pub fn ln(x: f32, engine: u32) -> f32 {
@@ -184,7 +184,7 @@ pub fn ln(x: f32, engine: u32) -> f32 {
 }
 
 /// Engine-dispatched `ln_1p`: engine ≥ 5 evaluates `ln(1 + x)` through
-/// [`crate::det::lnf`], below that platform `ln_1p` (ADR 0001).
+/// `crate::det::lnf`, below that platform `ln_1p` (ADR 0001).
 #[inline]
 pub fn ln_1p(x: f32, engine: u32) -> f32 {
     if engine >= 5 {
@@ -194,7 +194,7 @@ pub fn ln_1p(x: f32, engine: u32) -> f32 {
     }
 }
 
-/// Engine-dispatched `x^y`: [`crate::det::powff`] for engine ≥ 5, platform
+/// Engine-dispatched `x^y`: `crate::det::powff` for engine ≥ 5, platform
 /// libm below (ADR 0001).
 #[inline]
 pub fn powf(x: f32, y: f32, engine: u32) -> f32 {
@@ -205,7 +205,7 @@ pub fn powf(x: f32, y: f32, engine: u32) -> f32 {
     }
 }
 
-/// Engine-dispatched hyperbolic tangent: [`crate::det::tanhf`] for engine ≥
+/// Engine-dispatched hyperbolic tangent: `crate::det::tanhf` for engine ≥
 /// 5, platform libm below (ADR 0001).
 #[inline]
 pub fn tanh(x: f32, engine: u32) -> f32 {
@@ -216,7 +216,7 @@ pub fn tanh(x: f32, engine: u32) -> f32 {
     }
 }
 
-/// Engine-dispatched base-10 log: [`crate::det::log10f`] for engine ≥ 5,
+/// Engine-dispatched base-10 log: `crate::det::log10f` for engine ≥ 5,
 /// platform libm below (ADR 0001).
 #[inline]
 pub fn log10(x: f32, engine: u32) -> f32 {
@@ -228,7 +228,7 @@ pub fn log10(x: f32, engine: u32) -> f32 {
 }
 
 /// Engine-dispatched base-2 log: engine ≥ 5 evaluates `ln(x)/ln(2)` through
-/// [`crate::det::lnf`], below that platform `log2` (ADR 0001).
+/// `crate::det::lnf`, below that platform `log2` (ADR 0001).
 #[inline]
 pub fn log2(x: f32, engine: u32) -> f32 {
     if engine >= 5 {
@@ -239,7 +239,7 @@ pub fn log2(x: f32, engine: u32) -> f32 {
 }
 
 /// Engine-dispatched f64 tangent: engine ≥ 5 evaluates `sin/cos` through the
-/// [`crate::det`] kernels, below that platform `tan` (ADR 0001). Feeds the
+/// `crate::det` kernels, below that platform `tan` (ADR 0001). Feeds the
 /// K-weighting coefficient derivation.
 #[inline]
 pub fn tan_f64(x: f64, engine: u32) -> f64 {
@@ -250,7 +250,7 @@ pub fn tan_f64(x: f64, engine: u32) -> f64 {
     }
 }
 
-/// Engine-dispatched f64 `x^y`: [`crate::det::powf`] for engine ≥ 5, platform
+/// Engine-dispatched f64 `x^y`: `crate::det::powf` for engine ≥ 5, platform
 /// libm below (ADR 0001).
 #[inline]
 pub fn powf_f64(x: f64, y: f64, engine: u32) -> f64 {
@@ -261,7 +261,7 @@ pub fn powf_f64(x: f64, y: f64, engine: u32) -> f64 {
     }
 }
 
-/// Engine-dispatched f64 base-10 log: [`crate::det::log10`] for engine ≥ 5,
+/// Engine-dispatched f64 base-10 log: `crate::det::log10` for engine ≥ 5,
 /// platform libm below (ADR 0001).
 #[inline]
 pub fn log10_f64(x: f64, engine: u32) -> f64 {
@@ -282,7 +282,7 @@ pub fn dbfs(x: f32) -> f32 {
 }
 
 /// [`dbfs`] at a given engine revision: engine ≥ 5 evaluates through the
-/// deterministic [`crate::det`] kernels (cross-platform identical).
+/// deterministic `crate::det` kernels (cross-platform identical).
 pub fn dbfs_e(x: f32, engine: u32) -> f32 {
     20.0 * log10(x.max(1e-9), engine)
 }
@@ -296,7 +296,7 @@ pub fn db_to_lin(db: f32) -> f32 {
 }
 
 /// [`db_to_lin`] at a given engine revision: engine ≥ 5 evaluates through
-/// the deterministic [`crate::det`] kernels (cross-platform identical).
+/// the deterministic `crate::det` kernels (cross-platform identical).
 pub fn db_to_lin_e(db: f32, engine: u32) -> f32 {
     powf(10.0, db / 20.0, engine)
 }
@@ -449,7 +449,7 @@ pub fn loudness_lufs(samples: &[f32]) -> f32 {
 /// analog prototype (a +4 dB spherical-head high shelf at ~1.68 kHz and the
 /// RLB rumble high-pass at ~38 Hz) via the bilinear transform. At 48 kHz this
 /// reproduces the standard's coefficient table. `engine` dispatches the f64
-/// transcendentals (tan, powf) — engine ≥ 5 derives through [`crate::det`],
+/// transcendentals (tan, powf) — engine ≥ 5 derives through `crate::det`,
 /// so the coefficients are cross-platform identical (ADR 0001).
 /// Returns `(shelf_b, shelf_a, highpass_b, highpass_a)`.
 fn k_weighting_coeffs(sr: u32, engine: u32) -> ([f32; 3], [f32; 2], [f32; 3], [f32; 2]) {
@@ -504,7 +504,7 @@ pub fn loudness_lufs_gated(channels: &[&[f32]], sr: u32) -> f32 {
 
 /// [`loudness_lufs_gated`] at a given engine revision: engine ≥ 5 derives the
 /// K-weighting coefficients and the log10s through the deterministic
-/// [`crate::det`] kernels, so the reading is cross-platform identical.
+/// `crate::det` kernels, so the reading is cross-platform identical.
 pub fn loudness_lufs_gated_e(channels: &[&[f32]], sr: u32, engine: u32) -> f32 {
     // Gate over the shortest channel so mismatched lengths can't panic the
     // block slicing (in-repo callers pass equal lengths; the fn is pub).
@@ -578,7 +578,7 @@ pub fn hz_to_midi(hz: f32) -> f32 {
 }
 
 /// [`hz_to_midi`] at a given engine revision: engine ≥ 5 evaluates the log2
-/// through the deterministic [`crate::det`] kernels (cross-platform
+/// through the deterministic `crate::det` kernels (cross-platform
 /// identical).
 pub fn hz_to_midi_e(hz: f32, engine: u32) -> f32 {
     69.0 + 12.0 * log2(hz / 440.0, engine)
@@ -594,7 +594,7 @@ pub(crate) const NEG_LN_1000: f32 = -6.907_755;
 /// `decay` seconds, and `b0` normalises the impulse-response peak to `gain`,
 /// so a mode's loudness is its gain regardless of ring time. One definition
 /// for the offline and streaming modal banks. `engine` dispatches the
-/// transcendentals — engine ≥ 5 derives through [`crate::det`] (ADR 0001).
+/// transcendentals — engine ≥ 5 derives through `crate::det` (ADR 0001).
 pub(crate) fn modal_coeffs(
     freq: f32,
     decay: f32,
