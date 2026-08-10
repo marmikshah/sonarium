@@ -269,7 +269,10 @@ impl Instrument {
             if self.brightness != 1.0 {
                 graph.set_cutoff(self.brightness); // catch a new note up to the knob
             }
-            let pan = spread * self.design.unison_width;
+            // The builder clamps unison_width to 0..1; a deserialized design
+            // may not have come through it — without the clamp a width > 1
+            // flips a copy's polarity (negative gain).
+            let pan = (spread * self.design.unison_width).clamp(-1.0, 1.0);
             copies.push(UnisonCopy {
                 graph,
                 l: (1.0 - pan).min(1.0) * norm,
