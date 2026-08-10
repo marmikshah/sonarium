@@ -970,4 +970,54 @@ mod tests {
         }
         assert_eq!(m.current_section(), Some(c), "then c faded in");
     }
+
+    #[test]
+    fn same_frame_schedules_fire_in_call_order() {
+        // Three intensity changes quantized to the same beat: the last call
+        // must win (a swap_remove-based extraction used to scramble the tie,
+        // leaving the MIDDLE call in effect).
+        let mut m = AdaptiveMusic::new(48_000);
+        m.add_layer(LoopBuffer::from_doc(&tone(220.0)), 0.0);
+        m.set_tempo(120.0, 4); // beat = 24 000 frames
+        m.set_intensity_at(0.2, Quantize::Beat);
+        m.set_intensity_at(0.9, Quantize::Beat);
+        m.set_intensity_at(0.5, Quantize::Beat);
+        for _ in 0..50 {
+            advance(&mut m, 512); // 25 600 frames — past the beat
+        }
+        assert_eq!(m.intensity(), 0.5, "the last scheduled call wins the tie");
+    }
+
+    #[test]
+    fn never_rendered_reversal_defers_onward_transition_exactly() {
+        // The corner: A→B, cancel back to A, then ask for C — all before any
+        // fill, so the reversed fade sits at gain exactly 0 and the deferral
+        // computes a zero wait. The onward transition must still fire at an
+        // exact frame (position + 1), not slip to the next block's edge.
+        let run = |block: usize| {
+            let mut m = AdaptiveMusic::new(48_000);
+            m.add_section("a", &tone(330.0));
+            let b = m.add_section("b", &tone(660.0));
+            let c = m.add_section("c", &tone(990.0));
+            m.transition_to(b, Quantize::Immediate);
+            m.transition_to(0, Quantize::Immediate); // cancel back, gain still 0
+            m.transition_to(c, Quantize::Immediate); // queues behind the settled reversal
+            let mut acc = Vec::new();
+            let mut out = vec![0.0f32; block * 2];
+            for _ in 0..(60_000 / block) {
+                m.fill(&mut out);
+                acc.extend_from_slice(&out);
+            }
+            assert_eq!(m.current_section(), Some(c));
+            acc
+        };
+        let a = run(128);
+        let b = run(512);
+        let n = a.len().min(b.len());
+        assert_eq!(
+            a[..n],
+            b[..n],
+            "the deferred transition fires at an exact frame, not a block edge"
+        );
+    }
 }

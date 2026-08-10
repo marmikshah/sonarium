@@ -100,7 +100,11 @@ impl AdaptiveMusic {
             } else {
                 g_now / -f.step
             };
-            let fire_at = self.position + (wait.ceil().max(0.0) as u64);
+            // At least one frame out: a same-frame fire_at slips past this
+            // fill call's boundary scan and lands on the NEXT block's edge —
+            // a block-size-dependent position. One frame later, `fill`'s
+            // next-boundary scan picks it up exactly.
+            let fire_at = self.position + (wait.ceil().max(1.0) as u64);
             self.pending.push(Scheduled {
                 fire_at,
                 action: Action::Transition { to },
