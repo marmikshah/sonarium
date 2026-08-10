@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """night_drive — the typed tono API, end to end: compose, compile, render,
 and run a program live with scheduled commands. Run with an installed tono
 wheel (or `maturin develop` in crates/tono-py): python3 examples/night_drive.py"""

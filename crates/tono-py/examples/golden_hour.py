@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """golden_hour — a produced 16-bar piece, composed end to end with the typed
 tono API. The sound-designer counterpart to night_drive's feature tour: this
 one is about the MUSIC — a boom-bap pocket, a i–VI–III–v progression, a
