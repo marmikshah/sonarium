@@ -1308,8 +1308,8 @@ impl Song {
 
     /// Compile the song to an immutable `Program` — validation collects every
     /// problem in one pass and failures raise `tono.CompileError` carrying the
-    /// structured `.diagnostics`. `target` is `"offline"` (the default) or
-    /// `"runtime"`; in alpha.1 both produce the same artifact.
+    /// structured `.diagnostics`. `target` is `"offline"` (where streaming
+    /// blockers are warnings) or `"runtime"` (where they are errors).
     #[pyo3(signature = (sample_rate=None, target="offline"))]
     fn compile(&self, py: Python<'_>, sample_rate: Option<u32>, target: &str) -> PyResult<Program> {
         let target = match target {
@@ -1426,8 +1426,8 @@ impl Program {
         Ok(dict)
     }
 
-    /// Compile warnings (the streaming blockers), as diagnostic dicts of the
-    /// same shape as `CompileError.diagnostics`.
+    /// Offline compile warnings (the streaming blockers), as diagnostic dicts
+    /// of the same shape as `CompileError.diagnostics`.
     #[getter]
     fn warnings<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         diagnostics_list(py, &self.inner.warnings)

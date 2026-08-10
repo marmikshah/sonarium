@@ -24,7 +24,7 @@ use crate::streaming::StreamGraph;
 /// it was compiled with; a loader rejects a bundle newer than itself. Bumped
 /// when the serialized shape (or its semantics) changes — independently of
 /// the document schema and DSP engine revisions.
-pub const PROGRAM_VERSION: u32 = 1;
+pub const PROGRAM_VERSION: u32 = 2;
 
 /// A compiled song: validated, resolved, hashed. Built by
 /// [`Song::compile`](crate::song::Song::compile); reloaded by
@@ -37,7 +37,8 @@ pub struct Program {
     pub schema_version: u32,
     /// The resolved document's effective engine revision.
     pub engine_version: u32,
-    /// Canonical content hash (see [`content_hash`]). Re-verified on load.
+    /// Canonical semantic hash. Version 1 covers the document; version 2
+    /// covers every serialized semantic field except this hash.
     pub hash: u64,
     /// The target this program was compiled for (offline or runtime).
     #[serde(default)]
@@ -50,8 +51,9 @@ pub struct Program {
     pub meta: ProgramMeta,
     /// Bounded resource estimates the runtime preallocates from (ADR 0005).
     pub estimates: ResourceEstimates,
-    /// Compile warnings — in alpha.1 the streaming blockers, re-derived from
-    /// the resolved document on load (a pure function of it), never stored.
+    /// Offline compile warnings: streaming blockers re-derived from the
+    /// resolved document on load (a pure function of it), never stored.
+    /// Runtime-target compilation rejects these blockers instead.
     #[serde(skip)]
     pub warnings: Vec<Diagnostic>,
 }
@@ -150,7 +152,7 @@ pub enum ProgramError {
     HashMismatch {
         /// The hash stored in the bundle.
         stored: u64,
-        /// The hash recomputed from the resolved document.
+        /// The hash recomputed from the versioned bundle content.
         computed: u64,
     },
 }
@@ -189,11 +191,11 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 /// keys sorted (the serde_json default map), no insignificant whitespace,
 /// floats in shortest-round-trip form. Two equivalent songs — authored in
 /// Rust or Python — serialize to the same bytes.
-fn canonical_json(doc: &SoundDoc) -> Vec<u8> {
+fn canonical_json<T: Serialize>(value: &T) -> Vec<u8> {
     // serde_json's Map is a BTreeMap without the preserve_order feature, so
     // to_value→to_string is already the canonicalization (sorted keys,
     // compact separators, ryu float formatting).
-    let value = serde_json::to_value(doc).expect("a resolved document serializes");
+    let value = serde_json::to_value(value).expect("canonical content serializes");
     serde_json::to_string(&value)
         .expect("a resolved document serializes")
         .into_bytes()
@@ -207,6 +209,22 @@ pub fn content_hash(doc: &SoundDoc) -> u64 {
 }
 
 impl Program {
+    /// Recompute this bundle's integrity hash. Version 1 covered only the
+    /// resolved document; version 2 covers every serialized semantic field
+    /// except `hash` itself. Keeping the v1 rule here preserves the shipped
+    /// compatibility fixture while new bundles protect their runtime metadata.
+    pub(crate) fn computed_hash(&self) -> u64 {
+        if self.program_version <= 1 {
+            return content_hash(&self.doc);
+        }
+        let mut value = serde_json::to_value(self).expect("a program serializes");
+        value
+            .as_object_mut()
+            .expect("a program serializes as an object")
+            .remove("hash");
+        fnv1a(&canonical_json(&value))
+    }
+
     /// Render the full program to mono samples through the standard engine.
     pub fn render_mono(&self) -> Vec<f32> {
         render::render(&self.doc)
@@ -252,7 +270,7 @@ impl Program {
     }
 
     /// Whether the resolved document streams natively (no warnings is the
-    /// same signal — blockers are the only warnings alpha.1 produces).
+    /// same signal — blockers are the only warnings compilation produces).
     pub fn is_streamable(&self) -> bool {
         self.warnings.is_empty()
     }
@@ -275,7 +293,7 @@ impl Program {
     }
 
     /// Load a bundle: parse, reject a newer revision (T3001), re-verify the
-    /// content hash (T3002), and re-derive the warnings from the resolved
+    /// semantic hash (T3002), and re-derive the warnings from the resolved
     /// document. No musical recomputation — loading never recompiles.
     pub fn from_json(json: &str) -> Result<Program, ProgramError> {
         let mut program: Program =
@@ -286,7 +304,7 @@ impl Program {
                 supported: PROGRAM_VERSION,
             });
         }
-        let computed = content_hash(&program.doc);
+        let computed = program.computed_hash();
         if computed != program.hash {
             return Err(ProgramError::HashMismatch {
                 stored: program.hash,
@@ -362,7 +380,8 @@ mod tests {
         entries.reverse();
         *obj = entries.into_iter().collect();
         let reparsed: SoundDoc = serde_json::from_value(value).unwrap();
-        assert_eq!(content_hash(&reparsed), program.hash);
+        assert_eq!(content_hash(&reparsed), content_hash(&program.doc));
+        assert_eq!(program.computed_hash(), program.hash);
     }
 
     #[test]
@@ -415,6 +434,14 @@ mod tests {
         value["doc"]["duration"] = serde_json::json!(9.0);
         let err = Program::from_json(&serde_json::to_string(&value).unwrap()).unwrap_err();
         assert!(matches!(err, ProgramError::HashMismatch { .. }));
+
+        let mut value: serde_json::Value = serde_json::from_str(&program.to_json()).unwrap();
+        value["meta"]["sample_rate"] = serde_json::json!(48_000);
+        let err = Program::from_json(&serde_json::to_string(&value).unwrap()).unwrap_err();
+        assert!(
+            matches!(err, ProgramError::HashMismatch { .. }),
+            "runtime metadata is part of a v2 bundle's integrity boundary"
+        );
     }
 
     #[test]

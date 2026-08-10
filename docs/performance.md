@@ -4,9 +4,9 @@ What "within the documented reference budgets" means for tono, and how the
 numbers are produced:
 
 - Benches live in `crates/tono-core/benches/render.rs` (criterion).
-- The report-only **Bench** CI workflow runs them on core-touching PRs and
-  publishes the results — **no per-commit gate**, by design: shared CI
-  runners are too noisy for hard thresholds.
+- The CI workflow can run them by explicit manual dispatch and publishes the
+  results — **no per-commit gate**, by design: shared CI runners are too noisy
+  for hard thresholds.
 - Read reports against the budgets below: a sustained 2× regression on any
   of them is a release blocker; a few percent is runner weather.
 - Reference numbers measured on Apple Silicon (macOS-aarch64, release); CI

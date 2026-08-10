@@ -3,8 +3,8 @@
 //! Validation collects ALL problems in one pass instead of stopping at the
 //! first error. Each [`Diagnostic`] carries a stable machine `code`, a
 //! [`Severity`], the object `path` it blames, a human-readable `message`, and
-//! optional `remediation` text an agent can act on. Streaming blockers
-//! surface as warnings, not surprises.
+//! optional `remediation` text a caller can act on. Streaming blockers are
+//! warnings for offline targets and errors for runtime targets.
 //!
 //! Codes are stable — tools pattern-match on them, so an existing code never
 //! changes meaning. The bands are:
@@ -54,7 +54,7 @@ pub struct Diagnostic {
     pub severity: Severity,
     /// The object path the diagnostic blames (e.g. `arrangement`).
     pub path: String,
-    /// What is wrong, in words a human or agent can act on.
+    /// What is wrong, in words a caller can act on.
     pub message: String,
     /// How to fix it. Omitted from JSON when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]

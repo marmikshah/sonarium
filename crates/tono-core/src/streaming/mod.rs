@@ -56,7 +56,7 @@ use proc::{Proc, try_proc};
 use source::{Src, try_src};
 
 /// Why a document can't stream — one entry per blocking feature, so an author
-/// (or an agent) gets the reason and the fix instead of a silent fallback.
+/// gets the reason and the fix instead of a silent fallback.
 /// The `Display` text is the actionable message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamBlocker {

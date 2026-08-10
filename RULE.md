@@ -16,9 +16,8 @@ programmatic playground.
   vocabulary (SoundDoc, Patch, Engine, layers/sections) — never reference
   other products by name or by analogy.
 - **Docs are split by audience.** User-facing text (README, docs/, crate
-  READMEs, example headers) answers with cargo/maturin/pip commands and
-  runnable examples — the `Makefile` is the *contributor* interface and its
-  targets appear only here (RULE.md) and in the architecture guide.
+  READMEs, example headers) answers with direct cargo/maturin/pip commands and
+  runnable examples. Contributor gates use those same direct commands.
 - **There is never a 2.0.** Breaking changes land in ordinary 1.x minors, and
   deprecated surface is removed directly in the next minor — no long-lived
   deprecation shims. The byte-identity promise below is a product guarantee,
@@ -35,25 +34,27 @@ programmatic playground.
 The root is a pure virtual workspace manifest; every package lives under
 `crates/`.
 
-- **`crates/tono-core/`** — the pure engine: the `SoundDoc` graph DSL, DSP,
+- **`crates/tono-core/`** — the platform-independent engine: the `SoundDoc` graph DSL, DSP,
   deterministic renderer, analysis/critique, graph transforms, the byte-identical
   **streaming** real-time renderer, the **runtime** (`Engine`/`Mixer`/`AudioSource`),
   the **instrument** / **drum-kit** / **adaptive-music** layers, and the **song**
-  arrangement layer. No I/O, no transport; pure compute.
+  arrangement layer. No platform I/O; deterministic compute and transport.
 - **`crates/tono-cli/`** — the `tono` crate (published to crates.io under that
   name): a thin CLI shell — the `tono render` command, audio-file encoders,
   the analysis image writer, and MIDI export. Depends on and re-exports
   `tono-core`.
 - **`crates/tono-desktop/`** — the native desktop studio (Tauri window + `cpal`
-  real-time audio + MIDI keyboard input). Excluded from `default-members` and CI;
-  built via `make desktop`. Heavy deps (webview/cpal/midir) never touch the default build.
+  real-time audio + MIDI keyboard input). Excluded from `default-members`;
+  build with `cargo build -p tono-desktop --release`. The Native workflow
+  checks it explicitly. Heavy deps
+  (webview/cpal/midir) never touch the default build.
 - **`crates/tono-play/`** — the programmatic playground: a `cpal` speaker so a Rust
   program can build a sound/instrument and hear it in a couple of lines. Excluded
-  from `default-members`/CI; run via `make play EXAMPLE=<name>`.
+  from `default-members`; run with `cargo run -p tono-play --example <name>`.
 - **`crates/tono-py/`** — the PyO3 Python bindings (render + live `Engine` stream).
-  Excluded from `default-members`/CI; built via `make python` / `make wheel`,
-  smoke-tested by `make python-test`. Build-from-source only — never published to
-  PyPI (the name is taken).
+  Excluded from `default-members`; build with `maturin develop -m
+  crates/tono-py/Cargo.toml` and run its two test scripts directly.
+  Build-from-source only — never published to PyPI (the name is taken).
 ## The invariant that matters
 
 Rendering is a pure function of `(graph, seed, sample_rate)` → **byte-identical**
@@ -77,24 +78,24 @@ renders forever.
 
 ## Build / test
 
-- `make ci` — the portable CI gate: `pre-commit-checks` + `test`. The pre-push
-  hook runs this, so a pushed head has already proven hosted CI locally.
-- `make verify` — the same gate by its older name (`fmt --check` + clippy
-  (`-D warnings`) + tests). `make check` is the mutating version.
-- `make pre-commit-checks` — the lint gate (fmt + clippy) alone.
-- `make verify-native` — the gate for the off-CI crates: touching tono-desktop /
-  tono-play / tono-py? This is your gate — plain `make verify` does not compile
-  them (they are non-default workspace members). CI runs it via the Native
-  workflow when those crates change.
-- `make desktop` — the native desktop studio (heavy deps, off the default build).
-- `make hooks` — install the git hooks (`.githooks/pre-commit`, `pre-push`).
+- Lint: `cargo fmt --all -- --check`, then
+  `cargo clippy --locked --all-targets -- -D warnings`.
+- Test: `cargo test --locked`.
+- Native crates: `cargo clippy --locked -p tono-desktop -p tono-play -p
+  tono-py --all-targets -- -D warnings`, then
+  `cargo test --locked -p tono-desktop -p tono-play`.
+- Python: build/install the wheel, then run
+  `python3 crates/tono-py/tests/smoke.py` and
+  `python3 crates/tono-py/tests/test_typed.py`.
+- Dependencies: `cargo deny check advisories licenses`.
+- Hooks: `git config core.hooksPath .githooks`. Pre-commit runs the lint
+  commands; pre-push refuses `master` and runs lint plus tests.
 
 ## Release checklist
 
-Every release, in order (the `release` target enforces clean master + tags
-from `Cargo.toml`; CI publishes to crates.io and builds the tag's CLI
-binaries — the wheel pipeline is manual-only for budget reasons, see the
-Wheels workflow comment):
+Every release starts from clean protected `master`. The publisher runs the
+registry commands directly; the tag workflow creates the GitHub Release and
+builds its CLI binaries. Wheels remain manual-only for budget reasons.
 
 1. Bump **both** version fields in the root `Cargo.toml` together:
    `workspace.package.version` and `workspace.dependencies.tono-core`
@@ -102,23 +103,25 @@ Wheels workflow comment):
    version field — a mismatch ships a CLI built against last release's core).
 2. Retitle the CHANGELOG's `## Unreleased` to `## X.Y.Z — <date>` (the
    Release workflow extracts the notes by that exact header).
-3. Confirm `cargo publish --dry-run -p tono-core` passes. The `-p tono`
-   dry-run only resolves once `tono-core` X.Y.Z is on crates.io, so it runs
-   after step 4, not before.
-4. Tag and push directly (no wrapper): from a clean master,
-   `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`. CI publishes
-   `tono-core` then `tono`, creates the GitHub Release, and builds the
-   tag's CLI binaries. Wheels: manual-only via the Wheels workflow's
-   `workflow_dispatch`, at explicit CI cost — see its header comment.
+3. Run the lint/test commands above and confirm
+   `cargo publish --dry-run -p tono-core` passes.
+4. Publish the library directly: `cargo publish -p tono-core`.
+5. After crates.io indexes that version, run `cargo publish --dry-run -p tono`
+   and then `cargo publish -p tono`.
+6. Tag and push directly: `git tag -a vX.Y.Z -m "vX.Y.Z"`, then
+   `git push origin vX.Y.Z`. The tag workflow creates the GitHub Release and
+   binary assets; it never owns registry credentials.
 
-Before the tag, the release-candidate gates: `make ci` on the pinned
-toolchain plus `stable-compat` green; `cargo doc -p tono-core --no-deps`
-warning-free (the rustdoc gate — keep it at zero); the API compatibility
+Before the tag, the release-candidate gates: the direct lint/test commands on
+the pinned toolchain and latest stable (`cargo +stable clippy --locked
+--all-targets -- -D warnings`, then `cargo +stable test --locked`);
+`cargo doc -p tono-core --no-deps` warning-free (the rustdoc gate — keep it at
+zero); the API compatibility
 review — `cargo public-api diff` against the last tag if the tool is
 installed, otherwise a manual skim of `git diff <last-tag> --
 crates/*/src/lib.rs` public items against docs/api-tiers.md (stable surface
-must not break; experimental changes called out in the CHANGELOG); the
-Audit workflow green (licenses + advisories); and the on-demand soak
+must not break; experimental changes called out in the CHANGELOG);
+`cargo deny check advisories licenses`; and the on-demand soak
 (`cargo test -p tono-core --test soak -- --include-ignored`) clean.
 
 ## Conventions

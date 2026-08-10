@@ -10,6 +10,7 @@ publish = false
 
 [lib]
 name = "tono"
+doc = false
 # cdylib only: the crate has no Rust tests (smoke coverage is Python-side), and
 # an rlib here collides with the root crate's libtono.rlib in workspace builds.
 crate-type = ["cdylib"]

@@ -1,5 +1,5 @@
 //! Range and structure validation for a [`SoundDoc`] beyond what serde
-//! enforces. Every message is human-readable so an agent can act on it.
+//! enforces. Every message is human-readable so a caller can act on it.
 
 use super::{
     Adsr, AutoTarget, ENGINE_VERSION, Modulator, Node, Playback, SCHEMA_VERSION, SeqWave, SoundDoc,
@@ -19,7 +19,7 @@ impl Adsr {
 }
 
 /// Why a document failed validation. Wraps the human-readable reason — the
-/// same message an agent pattern-matches to self-correct — behind a real
+/// same message a caller can use to correct the document — behind a real
 /// error type (`Display` + `std::error::Error`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidateError(String);
@@ -167,7 +167,7 @@ impl SoundDoc {
             let mut seen_streams = std::collections::HashMap::new();
             for (i, t) in tracks.iter().enumerate() {
                 // Errors name the layer by id when it has one — that is the
-                // address the agent used.
+                // address the caller used.
                 let who = match &t.id {
                     Some(id) => format!("layer '{id}'"),
                     None => format!("tracks[{i}]"),

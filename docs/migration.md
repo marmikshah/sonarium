@@ -113,12 +113,12 @@ meter map is a compile error (`T1005`), not a silent rounding.
 
 New in v1.10 — no code move, just the guarantees:
 
-- `PROGRAM_VERSION` is 1. Bundles record the schema/engine revisions they
-  were compiled with.
+- `PROGRAM_VERSION` is 2. Bundles record the schema/engine revisions they
+  were compiled with, and their hash covers the complete semantic bundle.
 - Loaders reject bundles from a *newer* program version and re-verify the
   content hash on load (a hand-edited bundle fails `T3002`).
 - A checked-in v1 fixture lives in `crates/tono-core/tests/compat/` — the
-  promise that v1 bundles keep loading.
+  promise that legacy document-only hashes keep loading.
 
 ## v1.9 → v1.10: schema v1 → v2
 

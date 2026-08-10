@@ -1,7 +1,7 @@
 //! The Tono synthesis-graph DSL.
 //!
-//! A [`SoundDoc`] is the canonical, declarative source of a sound. The AI agent
-//! authors one of these; the renderer turns it into samples. Everything here is
+//! A [`SoundDoc`] is the canonical, declarative source of a sound. An authoring
+//! tool creates one; the renderer turns it into samples. Everything here is
 //! `serde`-deserializable (the on-disk / wire format is JSON) and `JsonSchema`-
 //! describable so a tool can self-correct against the schema.
 
@@ -49,7 +49,7 @@ pub const SCHEMA_VERSION: u32 = 2;
 /// Revision 5 makes the render byte-identical ACROSS PLATFORMS (ADR 0001):
 /// every transcendental in the byte-pinned render path — oscillators,
 /// envelopes, filters, dynamics, pitch conversion, the loudness/normalize
-/// measurement — evaluates through the deterministic [`crate::det`] kernels
+/// measurement — evaluates through the deterministic `crate::det` kernels
 /// instead of platform libm (whose last bits differ between macOS-arm64 and
 /// linux-x86_64), and `convolve` runs a fixed-order radix-2 FFT (twiddles
 /// from `det::sin`/`det::cos`, f64 throughout, both signals zero-padded to
@@ -283,7 +283,7 @@ pub fn note_to_hz(s: &str) -> Option<f32> {
 }
 
 /// [`note_to_hz`] at a given engine revision: engine ≥ 5 evaluates the final
-/// `2^((m−69)/12)` through [`crate::det::powff`] (cross-platform identical),
+/// `2^((m−69)/12)` through `crate::det::powff` (cross-platform identical),
 /// below that through platform libm (bit-exact with every historical render).
 pub(crate) fn note_to_hz_e(s: &str, engine: u32) -> Option<f32> {
     let s = s.trim();

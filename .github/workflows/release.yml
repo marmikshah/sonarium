@@ -4,11 +4,12 @@ on:
   push:
     tags: ["v*"]
 
-# Publishes the library + CLI to crates.io on a v* tag, and creates the GitHub
-# Release with the tag's CHANGELOG section as notes. The crates token is a
-# production-environment secret (CRATES_API_TOKEN), exposed to cargo as
-# CARGO_REGISTRY_TOKEN. Silently skips when the token is unset (secrets can't be
-# read in `if:` directly, so route it through env — the documented indirection).
+permissions:
+  contents: read
+
+# Creates the tagged GitHub Release and its binary artifacts. Publishing the
+# Rust crates is a separate human action with the direct cargo commands in
+# RULE.md; this workflow owns no registry credentials.
 jobs:
   # The GitHub Release needs only the workflow token, so it is independent of
   # the crates.io gating — a tag always gets its release page. Idempotent: a
@@ -36,59 +37,16 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" \
             --notes-file /tmp/notes.md --verify-tag
 
-  publish:
-    runs-on: ubuntu-latest
-    environment: production
-    env:
-      HAS_TOKEN: ${{ secrets.CRATES_API_TOKEN != '' }}
-    steps:
-      - uses: actions/checkout@v5
-        if: env.HAS_TOKEN == 'true'
-      - uses: dtolnay/rust-toolchain@stable
-        if: env.HAS_TOKEN == 'true'
-      - name: Verify tag matches Cargo.toml version
-        if: env.HAS_TOKEN == 'true'
-        run: |
-          CRATE_VERSION="$(make -s version)"
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          if [ "$CRATE_VERSION" != "$TAG_VERSION" ]; then
-            echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $CRATE_VERSION"; exit 1
-          fi
-      # Workspace publish order: the library first, then the CLI that depends on
-      # it. cargo publish waits for each crate to be indexed before returning.
-      # Each step is idempotent — if the version is already on crates.io (a
-      # re-run after a partial release), skip it instead of erroring, so a
-      # half-published tag can be re-run to completion.
-      - name: Publish tono-core
-        if: env.HAS_TOKEN == 'true'
-        run: |
-          V="${GITHUB_REF_NAME#v}"
-          if curl -sf "https://index.crates.io/to/no/tono-core" | grep -qF "\"vers\":\"$V\""; then
-            echo "tono-core $V already on crates.io — skipping"
-          else
-            cargo publish -p tono-core
-          fi
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_API_TOKEN }}
-      - name: Publish tono
-        if: env.HAS_TOKEN == 'true'
-        run: |
-          V="${GITHUB_REF_NAME#v}"
-          if curl -sf "https://index.crates.io/to/no/tono" | grep -qF "\"vers\":\"$V\""; then
-            echo "tono $V already on crates.io — skipping"
-          else
-            cargo publish -p tono
-          fi
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_API_TOKEN }}
-
   # Prebuilt CLI binaries with reproducible checksums (issue #52, beta.1):
   # per-tag matrix builds of the `tono` CLI for the three desktop targets,
   # each archived with a sha256 sidecar and uploaded to the GitHub Release.
   # Windows cpal-less build: the default features (no `play`) keep the CLI
   # dependency-light everywhere.
   binaries:
+    needs: github-release
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:

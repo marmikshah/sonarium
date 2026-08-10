@@ -1,7 +1,7 @@
 //! Surgical, path-addressed edits to a sound graph.
 //!
 //! Instead of re-submitting the whole [`SoundDoc`] to change one number
-//! (`refine_sound`), the agent addresses a node or parameter by a JSON path —
+//! (`refine_sound`), a caller addresses a node or parameter by a JSON path —
 //! `root.inputs[0].freq`, `root.stages[1].cutoff` — and applies small ops:
 //! many ordered edits in one render. Edits are applied on the `serde_json`
 //! representation, then parsed back to a `SoundDoc` and validated, so an
@@ -365,7 +365,7 @@ pub fn describe(doc: &SoundDoc) -> DescribeMap {
     };
     // Serializing a derived-Serialize SoundDoc is infallible in practice (the
     // presets::patch precedent); failing loud beats returning an empty map an
-    // agent would read as "nothing editable".
+    // caller would read as "nothing editable".
     let json = serde_json::to_value(doc).expect("SoundDoc serializes");
     if let crate::dsl::Node::Tracks { tracks, master, .. } = &doc.root {
         for (i, t) in tracks.iter().enumerate() {

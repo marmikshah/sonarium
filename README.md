@@ -116,8 +116,8 @@ tono render blip.json -o out/
 #   out/blip_wave.png    out/blip.stats.json (peak/RMS/LUFS/spectral)
 ```
 
-That loop — write a doc, render, read the images and stats, refine — is all a
-human *or an agent* needs to author sound by inspection. The
+That loop — write a doc, render, read the images and stats, refine — is all an
+authoring tool needs to shape sound by inspection. The
 [cookbook](docs/cookbook.md) has the full node vocabulary and recipes.
 
 **Where next?** Pick your path:
@@ -257,19 +257,6 @@ Every face renders the same audio byte-identically:
 The last two are developer faces that live in this repo — the
 [architecture guide](https://marmikshah.github.io/tono/architecture.html)
 covers them and the rest of the codebase.
-
-## A personal note
-
-Every line of code in tono was written by AI — my part was direction, and
-holding the project to the standards I use where I still write the code
-myself. If tono helps you as a tool, a reference, or a kick-start, that makes
-me genuinely happy: the tokens are already spent; the least they can do is be
-useful to you too.
-
-> **⚠️ The 1.x series** is AI-generated and not fully human-reviewed.
-> Breaking changes may land in minor releases despite my best intentions —
-> every removal is called out in the [CHANGELOG](CHANGELOG.md). Use at your
-> own risk.
 
 ## License
 

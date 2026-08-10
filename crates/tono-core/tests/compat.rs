@@ -17,8 +17,8 @@ fn read(path: &str) -> String {
 
 /// The alpha.1-era song shape (mute/solo + engine/version pins, before
 /// tempo/meter maps, sections, buses, and automation): parses with defaults
-/// for every field added since, compiles, and its program keeps the pinned
-/// hash — the exact compatibility contract for song JSON.
+/// for every field added since, compiles, and its current bundle keeps a
+/// pinned hash — the exact compatibility contract for song JSON.
 #[test]
 fn alpha1_song_loads_and_compiles() {
     let song: Song = serde_json::from_str(&read("song-alpha1.json")).expect("alpha.1 song parses");
@@ -32,8 +32,8 @@ fn alpha1_song_loads_and_compiles() {
     );
     program.doc.validate().expect("the resolved doc validates");
     assert_eq!(
-        program.hash, 0xd5c173a2aecefbc5,
-        "the alpha.1 song compiles to its historical hash — if this changed, \
+        program.hash, 0x4ce124e0bc294e8b,
+        "the alpha.1 song compiles to its pinned v2 hash — if this changed, \
          the change is a compatibility break, intentional or not"
     );
     assert!(!program.render_mono().is_empty());

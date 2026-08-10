@@ -7,16 +7,13 @@ use super::{Song, SongError, SongTrack};
 use crate::diag::{CompileError, Diagnostic};
 use crate::dsl::{ENGINE_VERSION, Node, SeqNote, SoundDoc, Track};
 use crate::ids::TrackId;
-use crate::program::{
-    PROGRAM_VERSION, Program, ProgramMeta, ResourceEstimates, TrackMeta, blocker_warnings,
-    content_hash,
-};
+use crate::program::{PROGRAM_VERSION, Program, ProgramMeta, TrackMeta, blocker_warnings};
 use crate::units::Beat;
 
-/// What a compiled [`Program`] will be used for. In alpha.1 both targets
-/// produce the same artifact — the choice documents intent and surfaces the
-/// same streaming-coverage warnings either way; from alpha.3 the runtime
-/// target gates capability checks.
+/// What a compiled [`Program`] will be used for. Offline compilation preserves
+/// streaming blockers as warnings; runtime compilation promotes them to errors
+/// so a target that requires native streaming cannot silently fall back to a
+/// full pre-rendered buffer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CompileTarget {
@@ -47,7 +44,7 @@ const SEND_MIX_MAX: f32 = 0.5;
 /// step (the same floor the seq renderer applies). Saturating: a pathological
 /// step/len wraps in release (and panics in debug) for no benefit — the seq
 /// renderer already caps notes at the render window.
-fn note_end(n: &SeqNote) -> u32 {
+pub(crate) fn note_end(n: &SeqNote) -> u32 {
     n.step.saturating_add(n.len.max(1))
 }
 
@@ -101,12 +98,26 @@ impl Song {
     /// [`length_bars`](Self::length_bars) and [`to_doc`](Self::to_doc) share,
     /// so a deserialized song can't report a length its compile disagrees with.
     fn steps_per_bar(&self) -> u32 {
-        self.beats_per_bar.max(1) * self.steps_per_beat.max(1)
+        self.beats_per_bar
+            .max(1)
+            .saturating_mul(self.steps_per_beat.max(1))
+    }
+
+    fn checked_steps_per_bar(&self) -> Result<u32, SongError> {
+        self.beats_per_bar
+            .max(1)
+            .checked_mul(self.steps_per_beat.max(1))
+            .ok_or_else(|| {
+                SongError::Compile(format!(
+                    "beats_per_bar ({}) × steps_per_beat ({}) exceeds the u32 song grid",
+                    self.beats_per_bar, self.steps_per_beat
+                ))
+            })
     }
 
     /// Whether the meter is plain (`beats_per_bar`/4 throughout, no pickup) —
     /// the legacy placement path, byte-identical to before the maps existed.
-    fn plain_meter(&self) -> bool {
+    pub(crate) fn plain_meter(&self) -> bool {
         self.meter_map.is_empty() && self.pickup.is_none()
     }
 
@@ -119,7 +130,7 @@ impl Song {
 
     /// A beat position to a grid step, erroring when it lands between steps
     /// (the grid is the seq's; placements must sit on it).
-    fn beat_to_step(&self, beat: Beat) -> Result<u32, SongError> {
+    pub(crate) fn beat_to_step(&self, beat: Beat) -> Result<u32, SongError> {
         let spb = self.steps_per_beat.max(1) as i128;
         let num = beat.num as i128 * spb;
         if num % beat.den as i128 != 0 {
@@ -147,6 +158,7 @@ impl Song {
                 return Err(SongError::UnknownPattern(pl.pattern.clone()));
             }
         }
+        self.checked_steps_per_bar()?;
 
         let sec_per_step = 60.0 / (self.bpm.max(1.0) * self.steps_per_beat.max(1) as f32);
         let any_solo = self.tracks.iter().any(|t| t.solo);
@@ -335,7 +347,7 @@ impl Song {
     /// every problem in one pass (unknown references, a document that fails
     /// validation); the returned artifact carries the resolved document,
     /// musical metadata, bounded resource estimates, streaming-coverage
-    /// warnings, and a canonical content hash that a Python-authored
+    /// warnings, and a canonical semantic hash that a Python-authored
     /// equivalent song reproduces exactly.
     ///
     /// This API is **stable** — frozen at 1.10.0-rc.1
@@ -403,182 +415,28 @@ impl Song {
         }
 
         let warnings = blocker_warnings(&doc);
-        let hash = content_hash(&doc);
+        if opts.target == CompileTarget::Runtime && !warnings.is_empty() {
+            for mut blocker in warnings {
+                blocker.severity = crate::diag::Severity::Error;
+                diags.push(blocker);
+            }
+            return Err(diags);
+        }
         let meta = self.program_meta(&doc);
-        let estimates = program_estimates(&doc);
-        Ok(Program {
+        let estimates = super::estimate::program_estimates(&doc);
+        let mut program = Program {
             program_version: PROGRAM_VERSION,
             schema_version: doc.effective_version(),
             engine_version: doc.effective_engine(),
-            hash,
+            hash: 0,
             target: opts.target,
             doc,
             meta,
             estimates,
             warnings,
-        })
-    }
-
-    /// Validate the tempo/meter maps, pickup, grid placement, and
-    /// sections/markers — one pass, every problem collected (T1003–T1006).
-    fn validate_maps(&self, diags: &mut CompileError) {
-        // The tempo map (T1003): first at beat 0, strictly ascending, sane
-        // tempos, bounded (mirrors the document-level seq validation).
-        let map = &self.tempo_map;
-        if map.len() > 1024 {
-            diags.push(
-                Diagnostic::error(
-                    "T1003",
-                    "tempo_map",
-                    format!("tempo_map is capped at 1024 points, got {}", map.len()),
-                )
-                .with_remediation("split the piece or thin the tempo changes"),
-            );
-        }
-        if let Some(first) = map.first()
-            && first.at != Beat::zero()
-        {
-            diags.push(
-                Diagnostic::error("T1003", "tempo_map[0].at", "tempo_map's first point must be at beat 0")
-                    .with_remediation("add a point at beat 0 (the song's bpm applies before the first change otherwise)"),
-            );
-        }
-        for (i, p) in map.iter().enumerate() {
-            if !(p.bpm.is_finite() && p.bpm > 0.0) {
-                diags.push(
-                    Diagnostic::error(
-                        "T1003",
-                        format!("tempo_map[{i}].bpm"),
-                        format!("tempo must be positive and finite, got {}", p.bpm),
-                    )
-                    .with_remediation("set a tempo above 0 BPM"),
-                );
-            }
-            if i > 0 && p.at <= map[i - 1].at {
-                diags.push(
-                    Diagnostic::error(
-                        "T1003",
-                        format!("tempo_map[{i}].at"),
-                        "tempo_map must be strictly ascending by beat",
-                    )
-                    .with_remediation("sort the changes and merge any duplicates"),
-                );
-            }
-        }
-        // The meter map (T1004): first at bar 0, ascending bars, numerator ≥ 1,
-        // power-of-two denominator, bounded.
-        let meter = &self.meter_map;
-        if meter.len() > 256 {
-            diags.push(
-                Diagnostic::error(
-                    "T1004",
-                    "meter_map",
-                    format!("meter_map is capped at 256 points, got {}", meter.len()),
-                )
-                .with_remediation("consolidate repeated time-signature changes"),
-            );
-        }
-        if let Some(first) = meter.first()
-            && first.bar != 0
-        {
-            diags.push(
-                Diagnostic::error(
-                    "T1004",
-                    "meter_map[0].bar",
-                    "meter_map's first point must be at bar 0",
-                )
-                .with_remediation("add the opening time signature at bar 0"),
-            );
-        }
-        for (i, p) in meter.iter().enumerate() {
-            if p.numerator < 1 {
-                diags.push(
-                    Diagnostic::error(
-                        "T1004",
-                        format!("meter_map[{i}].numerator"),
-                        "time-signature numerator must be ≥ 1",
-                    )
-                    .with_remediation("use a numerator like 3 (3/4) or 6 (6/8)"),
-                );
-            }
-            if !p.denominator.is_power_of_two() || p.denominator > 64 {
-                diags.push(
-                    Diagnostic::error(
-                        "T1004",
-                        format!("meter_map[{i}].denominator"),
-                        format!(
-                            "time-signature denominator must be a power of two ≤ 64, got {}",
-                            p.denominator
-                        ),
-                    )
-                    .with_remediation("use 2, 4, 8, 16, 32, or 64"),
-                );
-            }
-            if i > 0 && p.bar <= meter[i - 1].bar {
-                diags.push(
-                    Diagnostic::error(
-                        "T1004",
-                        format!("meter_map[{i}].bar"),
-                        "meter_map must be strictly ascending by bar",
-                    )
-                    .with_remediation("sort the changes and merge any duplicates"),
-                );
-            }
-        }
-        if let Some(pickup) = self.pickup
-            && pickup < Beat::zero()
-        {
-            diags.push(
-                Diagnostic::error("T1004", "pickup", "the pickup bar can't be negative")
-                    .with_remediation("use zero (no pickup) or a positive beat length"),
-            );
-        }
-        // Grid placement (T1005): every placement must land on a step.
-        if !self.plain_meter() {
-            for (i, pl) in self.arrangement.iter().enumerate() {
-                if self.beat_to_step(self.beat_at_bar(pl.bar)).is_err() {
-                    diags.push(
-                        Diagnostic::error("T1005", format!("arrangement[{i}].bar"), format!("bar {} lands between grid steps", pl.bar))
-                            .with_remediation("raise steps_per_beat, or move the placement/meter change onto the grid"),
-                    );
-                }
-            }
-        }
-        // Sections and markers (T1006).
-        for (i, s) in self.sections.iter().enumerate() {
-            if s.name.is_empty() {
-                diags.push(
-                    Diagnostic::error(
-                        "T1006",
-                        format!("sections[{i}].name"),
-                        "a section needs a name",
-                    )
-                    .with_remediation("name it (e.g. \"verse\", \"chorus\")"),
-                );
-            }
-            if s.bars < 1 {
-                diags.push(
-                    Diagnostic::error(
-                        "T1006",
-                        format!("sections[{i}].bars"),
-                        "a section must be at least one bar",
-                    )
-                    .with_remediation("set bars ≥ 1"),
-                );
-            }
-        }
-        for (i, m) in self.markers.iter().enumerate() {
-            if m.name.is_empty() {
-                diags.push(
-                    Diagnostic::error(
-                        "T1006",
-                        format!("markers[{i}].name"),
-                        "a marker needs a name",
-                    )
-                    .with_remediation("name it (e.g. \"drop\", \"cue\")"),
-                );
-            }
-        }
+        };
+        program.hash = program.computed_hash();
+        Ok(program)
     }
 
     /// The [`ProgramMeta`] of the resolved document: the musical facts a
@@ -600,7 +458,7 @@ impl Song {
             markers,
             length_bars: self.length_bars(),
             duration_secs: doc.duration,
-            duration_frames: duration_frames(doc),
+            duration_frames: super::estimate::duration_frames(doc),
             sample_rate: doc.sample_rate,
             tracks: self
                 .tracks
@@ -610,84 +468,12 @@ impl Song {
                     id: TrackId::from(i as u64 + 1),
                     name: t.name.clone(),
                     wave: t.wave,
-                    notes: track_note_count(doc, i),
+                    notes: super::estimate::track_note_count(doc, i),
                     mute: t.mute,
                     solo: t.solo,
                 })
                 .collect(),
         }
-    }
-}
-
-/// The total frame count of a resolved document's render.
-fn duration_frames(doc: &SoundDoc) -> u64 {
-    (doc.duration * doc.sample_rate as f32).round().max(0.0) as u64
-}
-
-/// The (start, end) steps of every note of one compiled track — direct notes
-/// plus placements, as rendered. `None` for a track that isn't seq-backed.
-fn track_note_spans(doc: &SoundDoc, index: usize) -> Option<Vec<(u32, u32)>> {
-    let Node::Tracks { tracks, .. } = &doc.root else {
-        return None;
-    };
-    let node = &tracks.get(index)?.node;
-    let seq = match node {
-        Node::Seq { notes, .. } => {
-            return Some(notes.iter().map(|n| (n.step, note_end(n))).collect());
-        }
-        Node::Chain { stages } => match stages.first() {
-            Some(Node::Seq { notes, .. }) => notes,
-            _ => return None,
-        },
-        _ => return None,
-    };
-    Some(seq.iter().map(|n| (n.step, note_end(n))).collect())
-}
-
-/// How many notes a compiled track plays (for [`TrackMeta`]).
-fn track_note_count(doc: &SoundDoc, index: usize) -> u32 {
-    track_note_spans(doc, index).map_or(0, |v| v.len() as u32)
-}
-
-/// The largest number of notes sounding at once within one track. Steps are
-/// half-open intervals [start, end): at a shared position an ending note is
-/// gone before the next starts (the sort applies −1 deltas before +1).
-fn peak_overlap(mut spans: Vec<(u32, u32)>) -> u32 {
-    let mut points: Vec<(u32, i64)> = Vec::with_capacity(spans.len() * 2);
-    for (start, end) in spans.drain(..) {
-        points.push((start, 1));
-        points.push((end, -1));
-    }
-    points.sort();
-    let mut current = 0i64;
-    let mut peak = 0i64;
-    for (_, delta) in points {
-        current += delta;
-        peak = peak.max(current);
-    }
-    peak.max(0) as u32
-}
-
-/// Bounded estimates of what the resolved document costs to render or run.
-fn program_estimates(doc: &SoundDoc) -> ResourceEstimates {
-    let mut events = 0u64;
-    let mut peak_voices = 0u32;
-    if let Node::Tracks { tracks, .. } = &doc.root {
-        for i in 0..tracks.len() {
-            if let Some(spans) = track_note_spans(doc, i) {
-                events += spans.len() as u64;
-                // Tracks all start at the song's head, so their per-track
-                // peaks can coincide — summing them is the safe upper bound.
-                peak_voices = peak_voices.saturating_add(peak_overlap(spans));
-            }
-        }
-    }
-    let frames = duration_frames(doc);
-    ResourceEstimates {
-        frames,
-        events,
-        peak_voices,
-        memory_bytes: frames.saturating_mul(8),
     }
 }
 
@@ -745,6 +531,15 @@ mod tests {
         let err = song.compile(&CompileOptions::default()).unwrap_err();
         assert_eq!(err.0.len(), 1);
         assert_eq!(err.0[0].code, "T1000");
+    }
+
+    #[test]
+    fn an_overflowing_deserialized_grid_is_a_compile_error() {
+        let mut song = demo_song();
+        song.beats_per_bar = u32::MAX;
+        song.steps_per_beat = u32::MAX;
+        let err = song.compile(&CompileOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("exceeds the u32 song grid"));
     }
 
     #[test]
@@ -851,6 +646,29 @@ mod tests {
     }
 
     #[test]
+    fn runtime_target_rejects_streaming_blockers() {
+        let mut song = demo_song();
+        song.master.push(
+            serde_json::from_value(
+                serde_json::json!({ "type": "convolve", "decay": 0.6, "mix": 0.4 }),
+            )
+            .unwrap(),
+        );
+        let err = song
+            .compile(&CompileOptions {
+                target: CompileTarget::Runtime,
+                ..CompileOptions::default()
+            })
+            .unwrap_err();
+        assert!(err.has_errors());
+        assert!(
+            err.0
+                .iter()
+                .any(|d| d.code == "T1508" && d.severity == crate::diag::Severity::Error)
+        );
+    }
+
+    #[test]
     fn an_invalid_resolved_doc_is_t2000() {
         // A sampler track without a SoundFont path resolves but fails
         // document validation at compile.
@@ -892,17 +710,6 @@ mod tests {
         let program = song.compile(&CompileOptions::default()).unwrap();
         assert_eq!(program.estimates.events, 4);
         assert_eq!(program.estimates.peak_voices, 3, "the chord is 3 voices");
-    }
-
-    #[test]
-    fn peak_overlap_treats_ends_as_half_open() {
-        assert_eq!(
-            peak_overlap(vec![(0, 4), (4, 8)]),
-            1,
-            "back-to-back, never 2"
-        );
-        assert_eq!(peak_overlap(vec![(0, 5), (4, 8)]), 2, "one step of overlap");
-        assert_eq!(peak_overlap(vec![]), 0);
     }
 
     #[test]

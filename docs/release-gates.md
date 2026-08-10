@@ -39,7 +39,7 @@ This file is the freeze checklist: rc.1 ships when every row is ✅.
   macOS-arm64 and linux-x86_64 in CI (`tests/golden.rs`, v5-* cases).
 - ✅ **Program hashes are canonical across Rust and Python** —
   `tests/equivalence.rs` and `crates/tono-py/tests/test_typed.py` pin the
-  same `0x5C8AD081AED2AAFE`, run in CI on both sides.
+  same value, run in CI on both sides.
 - ✅ **Old pinned documents render with historical engine behavior** —
   the engine-revision gates (`effective_engine`) and the full engine ≤ 4
   corpus, unchanged and green.
@@ -102,18 +102,18 @@ This file is the freeze checklist: rc.1 ships when every row is ✅.
 
 ## Engineering
 
-- ✅ **Required CI green and risk-routed** — one-job PR gate (`make ci`,
-  ubuntu, draft-gated); Native (macOS), Python, Bench (report-only),
-  Audit, and stable-compat validated on master pushes; path-filtered
-  where heavy.
+- ✅ **Required CI green and risk-routed** — one draft-gated Ubuntu PR job
+  shares its checkout, toolchain, cache, and build artifacts across Rust,
+  affected installed-wheel Python tests, and dependency policy. Native checks keep a
+  path-filtered macOS job; benchmarks are explicit manual dispatches.
 - ✅ **Golden, property, compatibility, Python-equivalence, and
   runtime-safety suites pass** — golden corpus, fuzz_validation +
   fuzz_bundle + fuzz_command_stream + fuzz_pattern_properties + fuzz_midi
   + fuzz_time, compat fixtures, the cross-language equivalence pins,
   rt_alloc + soak + performance determinism tests.
-- ✅ **Security/license checks have no unresolved blockers** — the Audit
-  workflow (cargo-deny: licenses + RustSec advisories on the committed
-  lockfile) green.
+- ✅ **Security/license checks have no unresolved blockers** — CI runs
+  cargo-deny for pull requests and on a weekly schedule against the committed
+  lockfile.
 - ✅ **Performance within documented budgets** — docs/performance.md
   (rc.1 references for all eight benches; the engine-5 premium documented
   and accepted).
@@ -126,5 +126,5 @@ This file is the freeze checklist: rc.1 ships when every row is ✅.
 
 With every gate ✅, rc.1 freezes: the public Rust and Python API surface
 (stable per docs/api-tiers.md), the document schema (SCHEMA_VERSION 2),
-the Program bundle format (PROGRAM_VERSION 1), and the DSP engine
+the Program bundle format (PROGRAM_VERSION 2), and the DSP engine
 (ENGINE_VERSION 5). From here to v1.10.0: release-blocking fixes only.

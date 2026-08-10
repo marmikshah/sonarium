@@ -8,8 +8,8 @@ determinism, bundle round-trips, the alpha.2 composition surface (tempo/meter
 maps, pickup, sections/markers, buses, automation, pattern ops, harmony), and
 the structured error paths.
 
-Run from the repo root after `make python`:
-    make python-test
+Run from the repo root after `maturin develop -m crates/tono-py/Cargo.toml`:
+    python3 crates/tono-py/tests/test_typed.py
 """
 
 import json
@@ -24,7 +24,7 @@ import tono
 
 # The cross-language pin — crates/tono-core/tests/equivalence.rs asserts the
 # same value. If this changes, change both or the languages disagree.
-REFERENCE_HASH = 0x5C8AD081AED2AAFE
+REFERENCE_HASH = 0x6790A0ED1072B5F5
 
 
 def reference_program() -> "tono.Program":

@@ -1,7 +1,7 @@
 //! tono — a deterministic sound engine on the command line.
 //!
 //! Render a `SoundDoc` to audio plus the two feedback images and stats, so any
-//! tool — or an agent with a shell — can author sound by the loop: write a doc,
+//! command-line tool can author sound by the loop: write a doc,
 //! render it, look at the spectrogram/waveform, refine.
 
 use std::fs;
@@ -30,7 +30,7 @@ USAGE:
 
     tono schema [sounddoc|patch]
         Print the JSON Schema of the document format (for editor
-        autocomplete, validation, and agent self-correction).
+        autocomplete and validation).
 
     tono midi FILE.json [-o FILE.mid] [--song]
         Export a SoundDoc's sequences to a Standard MIDI File.

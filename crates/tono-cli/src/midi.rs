@@ -188,7 +188,7 @@ pub fn export_song_midi(song: &Song, out: &Path) -> Result<MidiSummary> {
 
 /// What [`import_midi`] read.
 pub struct ImportSummary {
-    /// tono tracks produced (one per MIDI track with notes).
+    /// tono tracks produced (one per MIDI track/channel/program group).
     pub tracks: usize,
     /// Total notes imported.
     pub notes: usize,
@@ -202,9 +202,16 @@ struct RawNote {
     tick_off: u64,
     key: u8,
     velocity: u8,
-    /// GM percussion channel (10) — becomes the `kit` voice.
-    drums: bool,
+    /// MIDI channel. Channel 10 becomes the `kit` voice; other channels stay
+    /// separate so Format-0 files do not collapse a whole arrangement.
+    channel: u8,
     /// GM program active at note-on, for voice mapping.
+    program: u8,
+}
+
+struct OpenNote {
+    tick_on: u64,
+    velocity: u8,
     program: u8,
 }
 
@@ -220,10 +227,10 @@ struct ImportedTrack {
     notes: Vec<SeqNote>,
 }
 
-/// Read a Standard MIDI File and quantize every track that has notes onto the
-/// `steps_per_beat` grid — the machinery [`import_midi`] (which wraps the
-/// tracks as a renderable [`SoundDoc`]) and [`import_midi_song`] (which wraps
-/// them as a [`Song`]) share.
+/// Read a Standard MIDI File and quantize every track/channel/program group
+/// that has notes onto the `steps_per_beat` grid — the machinery [`import_midi`]
+/// (which wraps the groups as a renderable [`SoundDoc`]) and
+/// [`import_midi_song`] (which wraps them as a [`Song`]) share.
 ///
 /// Mapping: the first tempo event anywhere in the file sets one global `bpm`
 /// (later tempo changes are retimed to it); channel 10 becomes the `kit`
@@ -262,13 +269,15 @@ fn read_midi_tracks(src: &Path, steps_per_beat: u32) -> Result<(f32, Vec<Importe
     }
     let bpm = 60_000_000.0 / us_per_qn.max(1) as f32;
 
-    // Decode each MIDI track's notes (running program changes per channel).
+    // Decode each MIDI track's notes (running program changes per channel),
+    // then split Format-0/multi-channel tracks into single-voice groups.
     let mut song_tracks: Vec<Vec<RawNote>> = Vec::new();
     for track in &smf.tracks {
         let mut at = 0u64;
         let mut program = [0u8; 16];
-        // (channel, key) → (tick_on, velocity, program) for open notes.
-        let mut open: std::collections::HashMap<(u8, u8), (u64, u8, u8)> =
+        // MIDI permits repeated NoteOn messages for the same channel/key
+        // before their corresponding NoteOffs. Keep every open voice FIFO.
+        let mut open: std::collections::HashMap<(u8, u8), std::collections::VecDeque<OpenNote>> =
             std::collections::HashMap::new();
         let mut notes: Vec<RawNote> = Vec::new();
         for ev in track {
@@ -280,30 +289,49 @@ fn read_midi_tracks(src: &Path, steps_per_beat: u32) -> Result<(f32, Vec<Importe
             match message {
                 MidiMessage::ProgramChange { program: p } => program[ch as usize] = u8::from(p),
                 MidiMessage::NoteOn { key, vel } if u8::from(vel) > 0 => {
-                    open.insert(
-                        (ch, u8::from(key)),
-                        (at, u8::from(vel), program[ch as usize]),
-                    );
+                    open.entry((ch, u8::from(key)))
+                        .or_default()
+                        .push_back(OpenNote {
+                            tick_on: at,
+                            velocity: u8::from(vel),
+                            program: program[ch as usize],
+                        });
                 }
                 // NoteOn vel 0 is the wire-efficient NoteOff.
                 MidiMessage::NoteOn { key, .. } | MidiMessage::NoteOff { key, .. } => {
-                    if let Some((tick_on, velocity, prog)) = open.remove(&(ch, u8::from(key))) {
+                    let open_key = (ch, u8::from(key));
+                    let closed = open
+                        .get_mut(&open_key)
+                        .and_then(|voices| voices.pop_front());
+                    if open.get(&open_key).is_some_and(|voices| voices.is_empty()) {
+                        open.remove(&open_key);
+                    }
+                    if let Some(closed) = closed {
                         notes.push(RawNote {
-                            tick_on,
+                            tick_on: closed.tick_on,
                             tick_off: at,
                             key: u8::from(key),
-                            velocity,
-                            drums: ch == 9,
-                            program: prog,
+                            velocity: closed.velocity,
+                            channel: ch,
+                            program: closed.program,
                         });
                     }
                 }
                 _ => {}
             }
         }
-        if !notes.is_empty() {
-            song_tracks.push(notes);
+        let mut groups: std::collections::BTreeMap<(u8, u8), Vec<RawNote>> =
+            std::collections::BTreeMap::new();
+        for note in notes {
+            // A drum channel has one fixed voice; melodic program changes are
+            // separate groups because a tono track has one fixed voice too.
+            let program_key = if note.channel == 9 { 0 } else { note.program };
+            groups
+                .entry((note.channel, program_key))
+                .or_default()
+                .push(note);
         }
+        song_tracks.extend(groups.into_values());
     }
     if song_tracks.is_empty() {
         anyhow::bail!("no notes found in {}", src.display());
@@ -311,11 +339,12 @@ fn read_midi_tracks(src: &Path, steps_per_beat: u32) -> Result<(f32, Vec<Importe
 
     // Quantize onto the step grid and map each track's voice.
     let tick_to_step = |tick: u64| -> u32 {
-        ((tick * spb as u64 + ppq / 2) / ppq.max(1)).min(u32::MAX as u64) as u32
+        (tick.saturating_mul(spb as u64).saturating_add(ppq / 2) / ppq.max(1)).min(u32::MAX as u64)
+            as u32
     };
     let mut tracks = Vec::with_capacity(song_tracks.len());
     for notes in &song_tracks {
-        let drums = notes.iter().any(|n| n.drums);
+        let drums = notes[0].channel == 9;
         let wave = if drums {
             SeqWave::Kit
         } else {
@@ -415,10 +444,10 @@ pub fn import_midi(src: &Path, steps_per_beat: u32) -> Result<(SoundDoc, ImportS
     ))
 }
 
-/// Read a Standard MIDI File into a [`Song`] — one song track per MIDI track,
-/// notes written directly onto the track (no pattern recovery: patterns are
-/// an authoring convenience, not something to reverse-engineer out of a flat
-/// file). The inverse of [`export_song_midi`].
+/// Read a Standard MIDI File into a [`Song`] — one song track per MIDI
+/// track/channel/program group, with notes written directly onto the track (no
+/// pattern recovery: patterns are an authoring convenience, not something to
+/// reverse-engineer out of a flat file). The inverse of [`export_song_midi`].
 ///
 /// The mapping is [`import_midi`]'s exactly (shared machinery): the file's
 /// first tempo event sets `song.bpm` (later tempo changes are retimed to
@@ -809,6 +838,98 @@ mod song_tests {
         assert_eq!(song.tracks[0].notes[0].len, 4);
         assert_eq!(song.tracks[1].notes[0].step, 0);
         assert_eq!(song.tracks[1].notes[0].len, 4);
+    }
+
+    #[test]
+    fn format_zero_splits_channels_and_preserves_overlapping_notes() {
+        let dir = std::env::temp_dir().join("tono-midi-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("format_zero.mid");
+        let midi = |delta: u32, channel: u8, message: MidiMessage| -> TrackEvent<'static> {
+            TrackEvent {
+                delta: delta.into(),
+                kind: TrackEventKind::Midi {
+                    channel: channel.into(),
+                    message,
+                },
+            }
+        };
+        let track = vec![
+            TrackEvent {
+                delta: 0.into(),
+                kind: TrackEventKind::Meta(MetaMessage::Tempo(500_000u32.into())),
+            },
+            midi(0, 0, MidiMessage::ProgramChange { program: 0.into() }),
+            midi(
+                0,
+                0,
+                MidiMessage::NoteOn {
+                    key: 60.into(),
+                    vel: 100.into(),
+                },
+            ),
+            midi(
+                120,
+                0,
+                MidiMessage::NoteOn {
+                    key: 60.into(),
+                    vel: 90.into(),
+                },
+            ),
+            midi(
+                0,
+                9,
+                MidiMessage::NoteOn {
+                    key: 36.into(),
+                    vel: 110.into(),
+                },
+            ),
+            midi(
+                120,
+                0,
+                MidiMessage::NoteOff {
+                    key: 60.into(),
+                    vel: 0.into(),
+                },
+            ),
+            midi(
+                0,
+                9,
+                MidiMessage::NoteOff {
+                    key: 36.into(),
+                    vel: 0.into(),
+                },
+            ),
+            midi(
+                120,
+                0,
+                MidiMessage::NoteOff {
+                    key: 60.into(),
+                    vel: 0.into(),
+                },
+            ),
+            TrackEvent {
+                delta: 0.into(),
+                kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+            },
+        ];
+        let mut smf = Smf::new(Header::new(
+            Format::SingleTrack,
+            Timing::Metrical(PPQ.into()),
+        ));
+        smf.tracks.push(track);
+        smf.save(&path).unwrap();
+
+        let song = import_midi_song(&path, 4).unwrap();
+        assert_eq!(song.tracks.len(), 2);
+        assert_eq!(song.tracks[0].wave, SeqWave::Piano);
+        assert_eq!(song.tracks[0].notes.len(), 2);
+        assert_eq!(song.tracks[0].notes[0].step, 0);
+        assert_eq!(song.tracks[0].notes[0].len, 2);
+        assert_eq!(song.tracks[0].notes[1].step, 1);
+        assert_eq!(song.tracks[0].notes[1].len, 2);
+        assert_eq!(song.tracks[1].wave, SeqWave::Kit);
+        assert_eq!(song.tracks[1].notes.len(), 1);
     }
 
     #[test]

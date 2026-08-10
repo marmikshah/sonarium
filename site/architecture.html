@@ -406,8 +406,8 @@ Song + Patches + assets ──► validate: every problem in one  ──►   di
   5) freezes the DSP <em>math</em> — revision 5 routes every transcendental through the
   <code>det</code> kernels (pinned fdlibm-grade f64 polynomials, a fixed-order FFT), so bytes
   match across platforms, not just across runs; older revisions keep their historical renders.
-  <strong>program</strong> (<code>PROGRAM_VERSION</code>, starting at 1) freezes the <em>bundle
-  format</em> — a loader rejects a Program newer than itself (T3001) and re-verifies the content
+  <strong>program</strong> (<code>PROGRAM_VERSION</code>, currently 2) freezes the <em>bundle
+  format and semantic hash boundary</em> — a loader rejects a Program newer than itself (T3001) and re-verifies the content
   hash on load (T3002), never recompiles. A document pins the first two; compilation stamps all
   three into the artifact.</p>
   <div class="in-code"><b>in the code:</b> dsl/mod.rs (SCHEMA_VERSION, ENGINE_VERSION) · program.rs::PROGRAM_VERSION · det.rs (the engine-5 kernels)</div>
@@ -432,9 +432,8 @@ song host   ──►  <span class="a">runtime</span>: Performance (rung 9) — 
   <h2>the map</h2>
   <p>Cargo workspace: a virtual root manifest; the CLI, the engine and the faces
   live under <code>crates/</code>. Everything but the CLI and tono-core is <strong>off the default
-  build</strong> — <code>make verify</code> compiles only those two; <code>make
-  verify-native</code> gates the native faces. Row labels below are the
-  ladder rungs each module group implements.</p>
+  build</strong>; the workspace-wide Cargo gate still compiles and tests every
+  member explicitly. Row labels below are the ladder rungs each module group implements.</p>
 
   <div class="diagram">
     <div class="diagram-inner">
@@ -448,17 +447,17 @@ song host   ──►  <span class="a">runtime</span>: Performance (rung 9) — 
         <div class="box">
           <span class="name">tono-play</span>
           <span class="role">code playground: Speaker, play_doc, 11 examples</span>
-          <span class="run">make play EXAMPLE=drums</span>
+          <span class="run">cargo run -p tono-play --example drums</span>
         </div>
         <div class="box">
           <span class="name">tono-desktop</span>
           <span class="role">Tauri pattern station: step grid, live audio</span>
-          <span class="run">make desktop</span>
+          <span class="run">cargo build -p tono-desktop --release</span>
         </div>
         <div class="box">
           <span class="name">tono-py</span>
           <span class="role">PyO3 bindings: typed Song → Program → Performance, numpy</span>
-          <span class="run">make python</span>
+          <span class="run">maturin develop -m crates/tono-py/Cargo.toml</span>
         </div>
       </div>
       <div class="flow-arrow">│ all four depend on ▼ (tono-desktop/py stream through tono-play's Speaker)</div>
@@ -531,8 +530,10 @@ song host   ──►  <span class="a">runtime</span>: Performance (rung 9) — 
       <p>One command runs exactly what CI runs — fmt, clippy, all 500+ tests including the golden
       corpus, the offline/streaming byte-identity fuzz, and the zero-allocation audio-callback
       gate.</p>
-      <pre><code>make verify        <span class="c"># the default-build gate</span>
-make hooks         <span class="c"># install pre-commit / pre-push gates once per clone</span></code></pre>
+      <pre><code>cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+git config core.hooksPath .githooks  <span class="c"># enable the same local gates</span></code></pre>
     </li>
     <li>
       <h3>Climb rungs 1–4 by hand: render your first document</h3>
@@ -559,9 +560,9 @@ open out/blip.png    <span class="c"># the spectrogram; out/blip.stats.json has 
       <h3>Hear rungs 6–7 live from code</h3>
       <p>The tono-play examples are the guided tour of the layers — sounds, instruments, voice
       management, buses, songs, adaptive game music.</p>
-      <pre><code>make play                            <span class="c"># the playground walkthrough</span>
-make play EXAMPLE=band               <span class="c"># catalog + fluent song builder</span>
-make play EXAMPLE=adaptive           <span class="c"># intensity-driven stems + stinger</span>
+      <pre><code>cargo run -p tono-play --example playground  <span class="c"># walkthrough</span>
+cargo run -p tono-play --example band        <span class="c"># catalog + fluent song builder</span>
+cargo run -p tono-play --example adaptive    <span class="c"># intensity-driven stems + stinger</span>
 ls crates/tono-play/examples/        <span class="c"># all eleven</span></code></pre>
     </li>
     <li>
@@ -580,7 +581,7 @@ ls crates/tono-play/examples/        <span class="c"># all eleven</span></code><
 EOF
 cargo run -p tono -- compile groove.song.json            <span class="c"># writes groove.program.json</span>
 cargo run -p tono -- compile groove.song.json --inspect  <span class="c"># pins, hash, estimates, capabilities</span></code></pre>
-      <p>Then hear rung 9: <code>make play EXAMPLE=interactive_music</code> runs a Performance —
+      <p>Then hear rung 9: <code>cargo run -p tono-play --example interactive_music</code> runs a Performance —
       sections that switch on the bar, an intensity knob, an on-beat stinger.</p>
     </li>
     <li>
@@ -603,8 +604,9 @@ cargo run -p tono -- compile groove.song.json --inspect  <span class="c"># pins,
       <em>sounds</em> is different: that must go behind a new <code>engine</code> revision so old
       documents keep their bytes — and engine ≥ 5 math lives in <code>det.rs</code>, pinned
       across platforms. The golden tests arbitrate.</p>
-      <pre><code>make verify          <span class="c"># default crates (CI: ubuntu + macos)</span>
-make verify-native   <span class="c"># tono-desktop / tono-play / tono-py + all examples</span></code></pre>
+      <pre><code>cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked</code></pre>
     </li>
   </ol>
 
@@ -624,14 +626,14 @@ make verify-native   <span class="c"># tono-desktop / tono-play / tono-py + all 
         <tr><td>cross-platform byte-identity</td><td><code>det.rs</code> — documents stamped <code>engine: 5</code> share one pin set on every target; <code>dsp.rs</code> dispatches on the doc's engine</td></tr>
         <tr><td>speaker output in Rust</td><td><code>tono-play::Speaker</code> — the one cpal shim; desktop and py stream through it too</td></tr>
         <tr><td>analyze / grade a render</td><td><code>analysis.rs</code> (numbers + images), <code>review.rs</code> (pass/warn/fail against an archetype)</td></tr>
-        <tr><td>understand any workflow</td><td><code>Makefile</code> — every action is a make target; RULE.md is the contributor brief</td></tr>
+        <tr><td>understand any workflow</td><td><code>RULE.md</code> plus <code>.github/workflows/</code>; every command is direct</td></tr>
       </tbody>
     </table>
   </div>
 
   <div class="footer">
     tono v1.10.0 · workspace: tono (CLI) · tono-core · tono-play · tono-desktop · tono-py ·
-    gates: <span class="mono">make verify</span> + <span class="mono">make verify-native</span> ·
+    gates: <span class="mono">cargo fmt</span> + <span class="mono">cargo clippy</span> + <span class="mono">cargo test</span> ·
     reference: <a href="https://github.com/marmikshah/tono/blob/master/docs/cookbook.md">cookbook</a>, <a href="https://github.com/marmikshah/tono/blob/master/docs/runtime.md">runtime.md</a> · <a href="index.html">← back to the showcase</a>
   </div>
 </main>

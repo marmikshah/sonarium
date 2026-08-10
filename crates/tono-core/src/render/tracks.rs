@@ -69,7 +69,7 @@ fn is_native_stereo(node: &Node) -> bool {
 }
 
 /// Post-fader, pre-master snapshot of one layer's contribution to the stereo
-/// bus — the balance numbers an agent mixes by. "Pre-master" matters: a master
+/// bus — the balance numbers an author mixes by. "Pre-master" matters: a master
 /// compressor / reverb reshapes the bus AFTER these are measured. Energy and
 /// peak are measured per channel (pan-invariant: hard-panned and centered
 /// layers of equal power read equal).

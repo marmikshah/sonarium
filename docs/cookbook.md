@@ -359,7 +359,7 @@ A whole piece is a **Song**: instrument tracks, reusable patterns, and an arrang
 
 `Song::compile` produces a **Program**:
 
-- the resolved document plus a canonical content **hash** (FNV-1a — identical from Rust or Python for an equivalent song)
+- a canonical semantic **hash** over the complete bundle (FNV-1a — identical from Rust or Python for an equivalent song)
 - the musical facts: tempo, grid, bars, duration in seconds and frames, the track roster with stable ids
 - bounded **resource estimates**: frames, note events, peak voices, memory
 - **streaming-coverage warnings** — a plain compiled song (a schema-v2 mixer of built-in waves) streams natively with zero warnings; any blocked part is named and falls back to the buffer-backed `Player` (see [streaming](#stream-a-document-live))

@@ -1,7 +1,7 @@
 //! Shell-side analysis I/O: write the feedback images to disk.
 //!
-//! `tono-core` stays pure compute — it produces the numbers ([`stats`]) and the
-//! PNG bytes ([`spectrogram_png`] / [`waveform_png`]) but never touches the
+//! `tono-core` stays pure compute — it produces the numbers (`stats`) and the
+//! PNG bytes (`spectrogram_png` / `waveform_png`) but never touches the
 //! filesystem. This shell helper is where those bytes become files.
 
 use std::path::{Path, PathBuf};

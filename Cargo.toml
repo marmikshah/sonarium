@@ -12,7 +12,7 @@ members = [
 # tono-desktop (native GUI + real-time audio + MIDI), tono-play (cpal speaker for
 # the programmatic playground) and tono-py (the PyO3 Python extension) carry
 # heavy / platform deps, so they stay OUT of the default native build/test/clippy
-# and CI. Build them explicitly: `make desktop` / `make play` / `make python`.
+# and CI. Build them explicitly with the direct Cargo/Maturin commands in RULE.md.
 default-members = ["crates/tono-cli", "crates/tono-core"]
 
 [workspace.package]

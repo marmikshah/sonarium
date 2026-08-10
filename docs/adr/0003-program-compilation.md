@@ -19,18 +19,19 @@ applications render, ship, and run.
   streaming blockers/capabilities, and a canonical content hash.
 - **Three versions evolve independently** and are all recorded in the
   Program: `SCHEMA_VERSION` (document semantics), `ENGINE_VERSION` (DSP
-  kernels, per ADR 0001), and `PROGRAM_VERSION` (the bundle format,
-  starting at 1). A loader rejects a Program newer than itself.
+  kernels, per ADR 0001), and `PROGRAM_VERSION` (the bundle format).
+  Version 1 hashes only the resolved document; version 2 hashes the full
+  semantic bundle. A loader rejects a Program newer than itself.
 - **The canonical content hash is FNV-1a over canonical JSON**: UTF-8,
   object keys sorted (the serde_json default map), no insignificant
   whitespace, floats in shortest-round-trip form. It covers the
-  *semantic program* (the resolved document plus its pins), not the
+  *semantic program* (every serialized field except the hash itself), not the
   authoring structure and not serialization formatting — so two
   equivalent songs, whether authored in Rust or Python, compile to the
   same hash. The same Rust code computes it for both.
 - **Validation collects all diagnostics in one pass.** Diagnostics carry
   a stable code, severity, the object path, a message, and remediation
-  text; streaming blockers surface as warnings, not surprises.
+  text; streaming blockers are offline warnings and runtime-target errors.
 - **A Program loads without recompiling authoring structures.** It
   serializes as versioned JSON with the resolved document embedded —
   `Program::load` validates versions and re-derives nothing musical.
