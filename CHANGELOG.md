@@ -98,6 +98,28 @@ move existing work forward.
 - **A latent hang in the threaded SPSC test** — the pump/drain soak could
   spin forever under load (a full-block drain guard vs. a non-multiple
   tail); it now drains the exact tail once the producer is finished.
+- **The deep-review sweep** (line-by-line over the engine-5 kernel, the
+  streaming mixer, adaptive scheduling, MIDI, and the instrument), four
+  fixes each pinned by a regression test verified failing on the old code:
+  - `det::exp` mis-scaled its edge cases — `exp(710.0)` returned a wrong
+    finite value instead of `inf`, and deep underflow wrapped back to
+    normal-magnitude results instead of an exact subnormal/zero (the scale
+    exponent reaches ±1075 inside exp's early-return bounds but was clamped
+    to ±1022).
+  - Quantized adaptive actions scheduled for the **same frame** fired in a
+    `swap_remove`-scrambled order — of three intensity changes on one beat
+    the middle call won; ties now fire in schedule order. And a transition
+    queued behind a never-rendered reversal could defer to the current
+    frame, slipping to the next block's edge (a block-size-dependent
+    position); it now lands exactly one frame out, picked up by `fill`'s
+    boundary scan.
+  - **MIDI export retimes multi-tempo documents** — a 60 bpm seq in a
+    120 bpm file played back at half speed; ticks now scale by global/seq
+    bpm so every seq keeps its absolute time (the docs already promised
+    retiming; the code now does it).
+  - A deserialized `InstrumentDesign` with `unison_width > 1` (the builder
+    clamps it; serde doesn't) gave unison copies negative pan gains — the
+    pan now clamps where the invariant is consumed.
 
 ### Added
 - **Engine revision 5 — cross-platform byte-identity** (beta.1, issue #52):
