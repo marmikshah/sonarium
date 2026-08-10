@@ -133,15 +133,13 @@ impl AdaptiveMusic {
         if self.pending.iter().all(|s| s.fire_at > self.position) {
             return;
         }
-        let mut due: Vec<Scheduled> = Vec::new();
-        let mut i = 0;
-        while i < self.pending.len() {
-            if self.pending[i].fire_at <= self.position {
-                due.push(self.pending.swap_remove(i));
-            } else {
-                i += 1;
-            }
-        }
+        // Stable extraction: actions sharing a frame fire in the order they
+        // were scheduled (a swap_remove scan would scramble the tie order).
+        let pending = std::mem::take(&mut self.pending);
+        let (mut due, keep): (Vec<Scheduled>, Vec<Scheduled>) = pending
+            .into_iter()
+            .partition(|s| s.fire_at <= self.position);
+        self.pending = keep;
         due.sort_by_key(|s| s.fire_at);
         for s in due {
             self.apply(s.action);
