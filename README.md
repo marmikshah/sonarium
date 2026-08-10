@@ -5,7 +5,7 @@
   <img src="docs/logo-wordmark.png" width="384" alt="tono">
 </p>
 
-<p align="center"><strong>Game audio as a pure function — procedural, deterministic, zero-asset.<br>Compose music in code, compile it once, render or run it byte-identically anywhere.</strong></p>
+<p align="center"><strong>Audio as a pure function — procedural, deterministic, CI-testable.<br>Compose music in code, compile it once, render or run it byte-identically anywhere.</strong></p>
 
 <p align="center">
   <a href="https://github.com/marmikshah/tono/actions/workflows/ci.yml"><img src="https://github.com/marmikshah/tono/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -25,7 +25,7 @@
   <img src="docs/river-flows-spectrogram.png" width="640" alt="spectrogram of River Flows in You, 800 notes on the sampled piano">
 </p>
 
-<p align="center"><em>Everything you can hear below was rendered by this engine — no samples, no WAVs shipped.</em></p>
+<p align="center"><em>Every track below was rendered by this engine from song data — nothing here is a recording.</em></p>
 
 ## Hear it
 
