@@ -40,6 +40,10 @@ audio = program.render()                    # np.float32, shape (frames, 2), L/R
   canonical program hash an equivalent Rust song compiles to.
 - `Voice` builders chain: `.gain(..).pan(..).reverb(..).swing(..).humanize(..)`.
 - `program.save(path)` / `tono.Program.load(path)` ship the hashed bundle.
+- Runnable examples: [`examples/night_drive.py`](examples/night_drive.py)
+  (compose → compile → live `Performance`) and
+  [`examples/golden_hour.py`](examples/golden_hour.py) (a produced 16-bar
+  track — compiles, renders, and bounces `golden_hour.wav` you can play).
 
 ## Run it live
 
