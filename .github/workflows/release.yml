@@ -78,4 +78,8 @@ jobs:
       - name: Upload to the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+        # Pin bash on all three runners: the Windows default (pwsh) expands
+        # neither "$GITHUB_REF_NAME" (env access needs $env:) nor the dist/*
+        # glob, and the upload fails with "release not found".
+        shell: bash
         run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
