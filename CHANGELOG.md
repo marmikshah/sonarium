@@ -5,6 +5,11 @@ The rules that keep this file small: **one line per change**, grouped under
 design detail, and regression-test notes live in the commit history and
 `docs/adr/` — not here.
 
+## 1.10.1 — 2026-08-11
+
+### Fixed
+- **Release workflow** — pin `shell: bash` on the asset upload; the Windows runner's pwsh broke it, so the 1.10.0 tag shipped without its Windows binary.
+
 ## 1.10.0 — 2026-07-29
 
 **Music-as-code, production-grade.** Compose typed songs in Rust or Python,
