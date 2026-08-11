@@ -43,10 +43,13 @@ audio = program.render()                    # np.float32, shape (frames, 2), L/R
 - Runnable examples: [`examples/night_drive.py`](examples/night_drive.py)
   (compose → compile → live `Performance`),
   [`examples/golden_hour.py`](examples/golden_hour.py) (a produced 16-bar
-  track — compiles, renders, and bounces `golden_hour.wav` you can play), and
+  track — compiles, renders, and bounces `golden_hour.wav` you can play),
   [`examples/fur_elise.py`](examples/fur_elise.py) (Beethoven's bagatelle on
   the sampled grand — 3/8 meter map with a pickup, a tempo-map ritardando,
-  per-note dynamics).
+  per-note dynamics), and
+  [`examples/monsoon_melody.py`](examples/monsoon_melody.py) (an original
+  Bollywood-style ballad — flute over nylon-guitar arpeggios, a swung
+  half-time kit, a glockenspiel-shadowed lift).
 
 ## Run it live
 

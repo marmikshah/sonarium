@@ -58,5 +58,6 @@ All in [`crates/tono-py/examples/`](https://github.com/marmikshah/tono/tree/mast
 - [`night_drive.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/night_drive.py) — the typed API end to end: compose, compile, render, and run a program live with scheduled commands.
 - [`golden_hour.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/golden_hour.py) — a produced 16-bar track; compiles, renders, and bounces `golden_hour.wav` you can play.
 - [`fur_elise.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/fur_elise.py) — Beethoven's bagatelle on the sampled grand: 3/8 meter map with a pickup, a tempo-map ritardando, per-note dynamics.
+- [`monsoon_melody.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/monsoon_melody.py) — an original Bollywood-style ballad: flute over nylon-guitar arpeggios, a swung half-time kit, a glockenspiel-shadowed lift.
 - [`live_pygame.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/live_pygame.py) — live procedural audio for a Python game loop in ~10 lines.
 - [`render_numpy.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/render_numpy.py) — the pull API: render to a numpy array and use it anywhere.

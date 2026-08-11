@@ -220,7 +220,8 @@ The `music` module (Rust) / `tono.Pitch`/`Key`/`Chord` (Python) use a strict spe
 
 ## Full songs, runnable
 
-Two complete produced pieces live in the Python examples — clone the repo and run them:
+Three complete produced pieces live in the Python examples — clone the repo and run them:
 
 - [`golden_hour.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/golden_hour.py) — a produced 16-bar track: swing, humanize, a reverb bus, gain rides; compiles, renders, and bounces a WAV.
 - [`fur_elise.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/fur_elise.py) — Beethoven's bagatelle on the sampled grand: a true 3/8 meter map with a pickup, a ritardando on the tempo map, per-note dynamics.
+- [`monsoon_melody.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/monsoon_melody.py) — an original Bollywood-style ballad: chord-symbol voicings from `tono.Chord`, half-bar chord changes, a swung half-time kit, a glockenspiel-shadowed lift, a ritardando outro.
