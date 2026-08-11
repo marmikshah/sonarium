@@ -24,5 +24,7 @@ Every track below is an engine render from data — recognizable classics rebuil
   <audio controls preload="none" src="/tono/audio/golden-hour.mp4"></audio>
 - **fur-elise** — Beethoven's bagatelle on the sampled grand — true 3/8 meter with a pickup, a ritardando on the tempo map, per-note dynamics ([`fur_elise.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/fur_elise.py))
   <audio controls preload="none" src="/tono/audio/fur-elise.mp4"></audio>
+- **monsoon-melody** — an original Bollywood-style ballad — bansuri-like flute over nylon-guitar arpeggios, a swung half-time kit, a glockenspiel-shadowed lift ([`monsoon_melody.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/monsoon_melody.py))
+  <audio controls preload="none" src="/tono/audio/monsoon-melody.mp4"></audio>
 
-Build your own: the [quickstart](/get-started/quickstart) for sounds, [Compose songs](/guides/songs) for pieces like the last two.
+Build your own: the [quickstart](/get-started/quickstart) for sounds, [Compose songs](/guides/songs) for pieces like the last three.
