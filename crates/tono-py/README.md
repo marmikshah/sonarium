@@ -49,7 +49,12 @@ audio = program.render()                    # np.float32, shape (frames, 2), L/R
   per-note dynamics), and
   [`examples/monsoon_melody.py`](examples/monsoon_melody.py) (an original
   Bollywood-style ballad — flute over nylon-guitar arpeggios, a swung
-  half-time kit, a glockenspiel-shadowed lift).
+  half-time kit, a glockenspiel-shadowed lift). Plus the game-genre pack,
+  all original melodies: [`examples/neon_rush.py`](examples/neon_rush.py)
+  (synthwave racing), [`examples/noir_lounge.py`](examples/noir_lounge.py)
+  (jazz noir), [`examples/emerald_vale.py`](examples/emerald_vale.py) (a 6/8
+  fantasy village), and [`examples/puzzle_menu.py`](examples/puzzle_menu.py)
+  (a quirky puzzle theme built by pattern transforms).
 
 ## Run it live
 
