@@ -26,5 +26,13 @@ Every track below is an engine render from data — recognizable classics rebuil
   <audio controls preload="none" src="/tono/audio/fur-elise.mp4"></audio>
 - **monsoon-melody** — an original Bollywood-style ballad — bansuri-like flute over nylon-guitar arpeggios, a swung half-time kit, a glockenspiel-shadowed lift ([`monsoon_melody.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/monsoon_melody.py))
   <audio controls preload="none" src="/tono/audio/monsoon-melody.mp4"></audio>
+- **neon-rush** — an original synthwave racer — tr808 four-on-the-floor, a 16th-note octave bass, euclidean tresillo claps, a rock-organ lead ([`neon_rush.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/neon_rush.py))
+  <audio controls preload="none" src="/tono/audio/neon-rush.mp4"></audio>
+- **noir-lounge** — an original jazz-noir theme — walking bass, rootless Rhodes stabs, heavy swing, vibes in the rain ([`noir_lounge.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/noir_lounge.py))
+  <audio controls preload="none" src="/tono/audio/noir-lounge.mp4"></audio>
+- **emerald-vale** — an original fantasy-village pastoral — a true 6/8 meter map, nylon harp-rolls, a lilting flute ([`emerald_vale.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/emerald_vale.py))
+  <audio controls preload="none" src="/tono/audio/emerald-vale.mp4"></audio>
+- **puzzle-menu** — an original puzzle/menu theme — one marimba motif derived by rotate/reverse/transpose, staccato everywhere ([`puzzle_menu.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/puzzle_menu.py))
+  <audio controls preload="none" src="/tono/audio/puzzle-menu.mp4"></audio>
 
-Build your own: the [quickstart](/get-started/quickstart) for sounds, [Compose songs](/guides/songs) for pieces like the last three.
+Build your own: the [quickstart](/get-started/quickstart) for sounds, [Compose songs](/guides/songs) for full pieces like these.

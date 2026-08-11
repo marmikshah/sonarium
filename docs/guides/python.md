@@ -59,5 +59,9 @@ All in [`crates/tono-py/examples/`](https://github.com/marmikshah/tono/tree/mast
 - [`golden_hour.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/golden_hour.py) — a produced 16-bar track; compiles, renders, and bounces `golden_hour.wav` you can play.
 - [`fur_elise.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/fur_elise.py) — Beethoven's bagatelle on the sampled grand: 3/8 meter map with a pickup, a tempo-map ritardando, per-note dynamics.
 - [`monsoon_melody.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/monsoon_melody.py) — an original Bollywood-style ballad: flute over nylon-guitar arpeggios, a swung half-time kit, a glockenspiel-shadowed lift.
+- [`neon_rush.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/neon_rush.py) — an original synthwave racer: euclidean claps, probability hats, a 16th-note octave bass.
+- [`noir_lounge.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/noir_lounge.py) — an original jazz-noir theme: heavy swing, walking bass, rootless Rhodes stabs.
+- [`emerald_vale.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/emerald_vale.py) — an original fantasy-village pastoral: a true 6/8 meter map, nylon harp-rolls.
+- [`puzzle_menu.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/puzzle_menu.py) — an original puzzle/menu theme built by pattern transforms.
 - [`live_pygame.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/live_pygame.py) — live procedural audio for a Python game loop in ~10 lines.
 - [`render_numpy.py`](https://github.com/marmikshah/tono/blob/master/crates/tono-py/examples/render_numpy.py) — the pull API: render to a numpy array and use it anywhere.
