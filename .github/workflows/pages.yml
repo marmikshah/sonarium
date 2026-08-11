@@ -1,15 +1,15 @@
 name: Pages
 
-# Deploys the showcase site (site/index.html + the demo audio and images from
-# docs/) to GitHub Pages on every master push that touches them.
+# Builds the VitePress docs site (sources in docs/) and deploys it to GitHub
+# Pages on every master push that touches the docs or the site config.
 
 on:
   push:
     branches: [master]
     paths:
-      - "site/**"
-      - "docs/examples/audio/**"
-      - "docs/*.png"
+      - "docs/**"
+      - "package.json"
+      - "package-lock.json"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -25,19 +25,20 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
-      - name: Assemble the site
-        run: |
-          mkdir -p _site/audio _site/img
-          cp site/index.html site/architecture.html _site/
-          cp docs/examples/audio/*.mp4 _site/audio/
-          cp docs/logo.png docs/logo-wordmark.png docs/river-flows-spectrogram.png _site/img/
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run docs:build
       - uses: actions/upload-pages-artifact@v4
         with:
-          path: _site
+          path: docs/.vitepress/dist
       - id: deployment
         uses: actions/deploy-pages@v4

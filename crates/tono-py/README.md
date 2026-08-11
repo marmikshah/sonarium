@@ -82,4 +82,4 @@ snapshots work the same in both modes.
 | `engine.load_patch(json).trigger(...)` | One-shot SFX patches. |
 | `engine.adaptive()` | An adaptive-music bed. |
 
-More: the [cookbook](../../docs/cookbook.md), the [runtime model](../../docs/runtime.md), and the design notes — [ADR 0004 (bindings)](../../docs/adr/0004-python-bindings.md), [ADR 0005 (command delivery)](../../docs/adr/0005-realtime-command-delivery.md).
+More: the [sound-effects guide](https://marmikshah.github.io/tono/guides/sound-effects), the [runtime model](https://marmikshah.github.io/tono/guides/live), and the design notes — [ADR 0004 (bindings)](../../docs/adr/0004-python-bindings.md), [ADR 0005 (command delivery)](../../docs/adr/0005-realtime-command-delivery.md).

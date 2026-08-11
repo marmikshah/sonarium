@@ -72,10 +72,8 @@ tono render blip.json -o out/ --watch
 
 | I want to… | Go to |
 | --- | --- |
-| Make sounds (SFX, UI, impacts) | [cookbook.md](cookbook.md) — the full node vocabulary, recipes, and how to judge a sound by its stats |
-| Make music | the cookbook's [`seq` chapter](cookbook.md#music-with-seq), then the song layer — patterns, tracks, arrangements ([docs.rs](https://docs.rs/tono-core/latest/tono_core/song/)) |
-| Use it from Python | [crates/tono-py](../crates/tono-py/README.md) — the typed `Song`/`Pattern`/`Program` API; an equivalent song compiles to the same hash from Python or Rust |
-| Put it in a game | [runtime.md](runtime.md) — the live Engine/Mixer runtime and parametric patches (zero-asset SFX at runtime) |
-| Write no code | the desktop pattern station ([build it](../crates/tono-desktop)) or the playground examples (`cargo run -p tono-play --example live_band`) |
-
-The full map lives in [docs/README.md](README.md).
+| Make sounds (SFX, UI, impacts) | [Design sound effects](/guides/sound-effects) — recipes and how to judge a sound by its stats, plus the full [node vocabulary](/reference/sounddoc) |
+| Make music | [Compose songs](/guides/songs) — the `seq` chapter, then the song layer: patterns, tracks, arrangements ([docs.rs](https://docs.rs/tono-core/latest/tono_core/song/)) |
+| Use it from Python | [the Python guide](/guides/python) — the typed `Song`/`Pattern`/`Program` API; an equivalent song compiles to the same hash from Python or Rust |
+| Put it in a game | [Run live & embedded](/guides/live) — the live Engine/Mixer runtime and parametric patches (zero-asset SFX at runtime) |
+| Write no code | the desktop pattern station ([build it](https://github.com/marmikshah/tono/tree/master/crates/tono-desktop)) or the playground examples (`cargo run -p tono-play --example live_band`) |

@@ -1,6 +1,6 @@
-# Embed tono live — the runtime and parametric patches
+# Run live & embedded
 
-Depend on the pure [`tono-core`](../crates/tono-core) crate and your game gets
+Depend on the pure [`tono-core`](https://github.com/marmikshah/tono/tree/master/crates/tono-core) crate and your game gets
 the same deterministic engine the CLI and studio render with: a **live
 runtime** (sample-accurate song playback, a voice engine, a mixer) and
 **patches** — `SoundDoc` templates with named parameters that render
@@ -48,7 +48,7 @@ concrete engine type.
 A runnable, compile-checked `Engine`/`Mixer` example — a drum kit and a
 piano, notes sent live from code:
 `cargo run -p tono-play --example live_band`
-([source](../crates/tono-play/examples/live_band.rs)).
+([source](https://github.com/marmikshah/tono/blob/master/crates/tono-play/examples/live_band.rs)).
 
 API detail lives on [docs.rs](https://docs.rs/tono-core); the
 [architecture guide](https://marmikshah.github.io/tono/architecture.html)
@@ -148,7 +148,7 @@ fn on_collision(patch: &Patch, force: f32, object_size: f32) -> Vec<f32> {
   a tool can design the sound in the studio, read off the paths, and emit
   the patch.
 - Worked example:
-  [`docs/examples/parametric-impact.patch.json`](examples/parametric-impact.patch.json).
+  [`docs/examples/parametric-impact.patch.json`](https://github.com/marmikshah/tono/blob/master/docs/examples/parametric-impact.patch.json).
 
 ## Ship it anywhere
 

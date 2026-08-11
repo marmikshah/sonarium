@@ -88,8 +88,8 @@ USAGE:
 
     tono --version | --help
 
-The SoundDoc format and the node vocabulary are documented in docs/cookbook.md
-(https://github.com/marmikshah/tono/blob/master/docs/cookbook.md).";
+The SoundDoc format and the node vocabulary are documented in the SoundDoc reference
+(https://marmikshah.github.io/tono/reference/sounddoc).";
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
