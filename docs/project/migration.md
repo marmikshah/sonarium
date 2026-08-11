@@ -8,7 +8,7 @@ entry is one line of what changes, then the code move.
 ### Python: JSON strings → the typed API
 
 The legacy JSON-string calls are **deprecated** (they keep working through
-v1.10; see [api-tiers.md](api-tiers.md)). The typed API is the successor —
+v1.10; see [api-tiers.md](/project/api-tiers)). The typed API is the successor —
 and it's how you get compiled, hashed, runnable programs instead of one-shot
 renders.
 

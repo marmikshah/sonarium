@@ -12,4 +12,4 @@ cargo build -p tono-desktop --release
 - A Tauri window over the engine: step grid, catalog instruments, live audition, MIDI input, undo.
 - Not part of the default build or CI (webview/cpal/midir are heavy).
 
-More: the project [README](../../README.md) and the [quickstart](../../docs/quickstart.md).
+More: the project [README](../../README.md) and the [quickstart](https://marmikshah.github.io/tono/get-started/quickstart).

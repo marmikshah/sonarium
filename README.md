@@ -18,7 +18,7 @@
   <a href="https://marmikshah.github.io/tono/">Showcase</a> ·
   <a href="https://marmikshah.github.io/tono/architecture.html">Architecture</a> ·
   <a href="https://docs.rs/tono-core">API docs</a> ·
-  <a href="docs/cookbook.md">Cookbook</a>
+  <a href="https://marmikshah.github.io/tono/guides/sound-effects">Cookbook</a>
 </p>
 
 <p align="center">
@@ -121,15 +121,18 @@ runnable songs live in [crates/tono-py/examples](crates/tono-py/examples)
 
 ## Where next
 
-- **The guided first ten minutes** — [docs/quickstart.md](docs/quickstart.md).
-- **Make sounds** — the [cookbook](docs/cookbook.md): the node vocabulary,
-  recipes, and the Songs chapter.
-- **Embed in a game** — [docs/runtime.md](docs/runtime.md): the Engine/Mixer
+- **The guided first ten minutes** — the
+  [quickstart](https://marmikshah.github.io/tono/get-started/quickstart).
+- **Make sounds** — the [sound-effects
+  guide](https://marmikshah.github.io/tono/guides/sound-effects): recipes,
+  and how to judge a sound by its stats.
+- **Embed in a game** — [run live &
+  embedded](https://marmikshah.github.io/tono/guides/live): the Engine/Mixer
   runtime, parametric patches, adaptive music.
 - **No code** — the desktop pattern station ([build it](crates/tono-desktop))
   or the speaker playground ([crates/tono-play/examples](crates/tono-play/examples)).
 
-All guides: [docs/README.md](docs/README.md). The codebase tour:
+All guides: [the docs site](https://marmikshah.github.io/tono/). The codebase tour:
 [architecture](https://marmikshah.github.io/tono/architecture.html).
 
 ## License
