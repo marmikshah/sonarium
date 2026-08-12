@@ -8,8 +8,8 @@ permissions:
   contents: read
 
 # Creates the tagged GitHub Release and its binary artifacts. Publishing the
-# Rust crates is a separate human action with the direct cargo commands in
-# RULE.md; this workflow owns no registry credentials.
+# Rust crates to crates.io is publish.yml's job (it owns the registry token);
+# this workflow only ever touches GitHub.
 jobs:
   # The GitHub Release needs only the workflow token, so it is independent of
   # the crates.io gating — a tag always gets its release page. Idempotent: a

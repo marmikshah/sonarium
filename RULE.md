@@ -93,9 +93,10 @@ renders forever.
 
 ## Release checklist
 
-Every release starts from clean protected `master`. The publisher runs the
-registry commands directly; the tag workflow creates the GitHub Release and
-builds its CLI binaries. Wheels remain manual-only for budget reasons.
+Every release starts from clean protected `master`. Pushing the tag triggers
+both release workflows: `release.yml` creates the GitHub Release and builds
+its CLI binaries, `publish.yml` pushes the crates to crates.io. Wheels remain
+manual-only for budget reasons.
 
 1. Bump **both** version fields in the root `Cargo.toml` together:
    `workspace.package.version` and `workspace.dependencies.tono-core`
@@ -105,12 +106,15 @@ builds its CLI binaries. Wheels remain manual-only for budget reasons.
    Release workflow extracts the notes by that exact header).
 3. Run the lint/test commands above and confirm
    `cargo publish --dry-run -p tono-core` passes.
-4. Publish the library directly: `cargo publish -p tono-core`.
-5. After crates.io indexes that version, run `cargo publish --dry-run -p tono`
-   and then `cargo publish -p tono`.
-6. Tag and push directly: `git tag -a vX.Y.Z -m "vX.Y.Z"`, then
-   `git push origin vX.Y.Z`. The tag workflow creates the GitHub Release and
-   binary assets; it never owns registry credentials.
+4. Tag and push directly: `git tag -a vX.Y.Z -m "vX.Y.Z"`, then
+   `git push origin vX.Y.Z`. `release.yml` creates the GitHub Release and
+   binary assets; `publish.yml` publishes `tono-core`, waits for crates.io to
+   index it, then publishes `tono`. Both are idempotent — re-running a
+   released tag skips whatever already exists.
+5. `publish.yml` authenticates with the `CARGO_REGISTRY_TOKEN` repo secret (a
+   crates.io API token with the publish-update scope). If the workflow is ever
+   unavailable, the manual fallback is: `cargo publish -p tono-core`, wait for
+   the index, then `cargo publish -p tono`.
 
 Before the tag, the release-candidate gates: the direct lint/test commands on
 the pinned toolchain and latest stable (`cargo +stable clippy --locked
