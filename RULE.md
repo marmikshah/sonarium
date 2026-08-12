@@ -111,10 +111,11 @@ manual-only for budget reasons.
    binary assets; `publish.yml` publishes `tono-core`, waits for crates.io to
    index it, then publishes `tono`. Both are idempotent — re-running a
    released tag skips whatever already exists.
-5. `publish.yml` authenticates with the `CARGO_REGISTRY_TOKEN` repo secret (a
-   crates.io API token with the publish-update scope). If the workflow is ever
-   unavailable, the manual fallback is: `cargo publish -p tono-core`, wait for
-   the index, then `cargo publish -p tono`.
+5. `publish.yml` authenticates with the `CRATES_API_TOKEN` secret in the
+   `production` GitHub Environment (a crates.io API token with the
+   publish-update scope — the same convention as bevy_tono). If the workflow
+   is ever unavailable, the manual fallback is: `cargo publish -p tono-core`,
+   wait for the index, then `cargo publish -p tono`.
 
 Before the tag, the release-candidate gates: the direct lint/test commands on
 the pinned toolchain and latest stable (`cargo +stable clippy --locked
