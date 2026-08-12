@@ -16,16 +16,18 @@ permissions:
 # Publishes the two registry crates to crates.io: `tono-core` first, then the
 # `tono` CLI once the index serves the new core (cargo strips the path dep and
 # pins the crates.io version, so core must be indexed first). Authentication is
-# the CARGO_REGISTRY_TOKEN repo secret (crates.io API token, publish-update
-# scope). Idempotent: a version already on crates.io is skipped, so re-running
-# a published tag is a no-op. The GitHub Release + binaries are release.yml's
-# job; this workflow never touches them.
+# the CRATES_API_TOKEN secret in the `production` GitHub Environment (crates.io
+# API token, publish-update scope — same convention as bevy_tono), mapped to
+# CARGO_REGISTRY_TOKEN for cargo. Idempotent: a version already on crates.io is
+# skipped, so re-running a published tag is a no-op. The GitHub Release +
+# binaries are release.yml's job; this workflow never touches them.
 jobs:
   crates:
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 30
     env:
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_API_TOKEN }}
       TAG: ${{ inputs.tag || github.ref_name }}
       UA: "tono-ci (https://github.com/marmikshah/tono)"
     steps:
