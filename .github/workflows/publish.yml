@@ -1,0 +1,70 @@
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish (e.g. v1.10.1) — for tags pushed before this workflow existed"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Publishes the two registry crates to crates.io: `tono-core` first, then the
+# `tono` CLI once the index serves the new core (cargo strips the path dep and
+# pins the crates.io version, so core must be indexed first). Authentication is
+# the CARGO_REGISTRY_TOKEN repo secret (crates.io API token, publish-update
+# scope). Idempotent: a version already on crates.io is skipped, so re-running
+# a published tag is a no-op. The GitHub Release + binaries are release.yml's
+# job; this workflow never touches them.
+jobs:
+  crates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      TAG: ${{ inputs.tag || github.ref_name }}
+      UA: "tono-ci (https://github.com/marmikshah/tono)"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88.0" # keep in sync with rust-toolchain.toml
+      - name: Guard — tag matches the workspace version
+        run: |
+          VERSION=$(grep -m1 '^version = "' Cargo.toml | cut -d'"' -f2)
+          echo "tag=$TAG workspace-version=$VERSION"
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::tag $TAG does not match workspace version $VERSION — wrong commit tagged?"
+            exit 1
+          fi
+      - name: Publish tono-core
+        run: |
+          if curl -sf -H "User-Agent: $UA" https://index.crates.io/to/no/tono-core | grep -qF "\"vers\":\"${TAG#v}\""; then
+            echo "tono-core ${TAG#v} already on crates.io — skipping"
+          else
+            cargo publish -p tono-core
+          fi
+      - name: Wait for crates.io to index tono-core
+        run: |
+          for i in $(seq 1 20); do
+            if curl -sf -H "User-Agent: $UA" https://index.crates.io/to/no/tono-core | grep -qF "\"vers\":\"${TAG#v}\""; then
+              echo "tono-core ${TAG#v} indexed"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::tono-core ${TAG#v} still not indexed after 5 minutes"
+          exit 1
+      - name: Publish tono (CLI)
+        run: |
+          if curl -sf -H "User-Agent: $UA" https://index.crates.io/to/no/tono | grep -qF "\"vers\":\"${TAG#v}\""; then
+            echo "tono ${TAG#v} already on crates.io — skipping"
+          else
+            cargo publish -p tono
+          fi
